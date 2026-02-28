@@ -10,7 +10,7 @@ from google import genai
 from typing import List
 
 # API anahtarı Render üzerinden çekilecek
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "BURAYA_API_ANAHTARINI_YAZ")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCySW3DQ7M7TkGT3wzsF7muyx3hRAxAU9Y")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
 
@@ -385,3 +385,4 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
+
