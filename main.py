@@ -3,6 +3,7 @@ import yt_dlp
 import asyncio
 import json
 import os
+from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -18,13 +19,13 @@ UNLU_LISTESI = [
     {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/videos"},
     {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"},
     {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
-    {"id": "metan", "ad": "Adem Metan", "url": "https://www.youtube.com/@AdemMetan/videos"},
     {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
-    {"id": "babala", "ad": "BaBaLa TV", "url": "https://www.youtube.com/@BabalaTV/videos"},
-    {"id": "ekonomist", "ad": "Özgür Demirtaş", "url": "https://www.youtube.com/@Prof.Dr.ÖzgürDemirtaş/videos"},
-    {"id": "evrim", "ad": "Evrim Ağacı", "url": "https://www.youtube.com/@evrimagaci/videos"},
-    {"id": "dw", "ad": "DW Türkçe", "url": "https://www.youtube.com/@dwturkce/videos"},
-    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv/videos"}
+    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv/videos"},
+    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
+    {"id": "onlat", "ad": "Onlat TV", "url": "https://www.youtube.com/@OnlatTV/videos"},
+    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın"},
+    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın"},
+    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
 ]
 
 # ==========================================
@@ -53,43 +54,63 @@ class AnalizRequest(BaseModel):
     ids: List[str] = []
     q: str = None
 
-def get_recent_vids(query, count=1):
+def get_recent_vids(query, count=3):
     try:
-        opts = {'extract_flat': True, 'playlist_end': count, 'quiet': True}
-        search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch{count}:{query}"
+        opts = {'extract_flat': True, 'playlist_end': 8, 'quiet': True} # Biraz fazla çekip filtreliyoruz
+        search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch8:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
             res = ydl.extract_info(search, download=False)
             vids = []
+            
+            # Son 3 gün hesaplaması
+            now = datetime.now()
+            limit_ts = (now - timedelta(days=3)).timestamp()
+            limit_date_str = (now - timedelta(days=3)).strftime('%Y%m%d')
+            
             if 'entries' in res:
-                for entry in res['entries'][:count]:
-                    vids.append((entry['id'], entry.get('title', 'Video')))
+                for entry in res['entries']:
+                    if not entry: continue
+                    if len(vids) >= count: break
+                    
+                    vid_id = entry.get('id')
+                    title = entry.get('title', 'Video')
+                    ts = entry.get('timestamp')
+                    upload_date = entry.get('upload_date')
+                    
+                    # Saat-tarih bilgisi varsa ve son 3 gün içindeyse
+                    if ts and ts >= limit_ts:
+                        dt_str = datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')
+                        vids.append((vid_id, title, dt_str, ts))
+                    # Saat yok ama gün bilgisi varsa
+                    elif upload_date and upload_date >= limit_date_str:
+                        y, m, d = upload_date[0:4], upload_date[4:6], upload_date[6:8]
+                        dt_str = f"{d}.{m}.{y} (Saat Belirsiz)"
+                        vids.append((vid_id, title, dt_str, 0))
+
             return vids
     except: return []
 
-async def process_video(name, vid, vtitle, sem):
-    # 1. BİREYSEL VİDEO ANALİZİ VE HAFIZA KONTROLÜ
+async def process_video(name, vid, vtitle, dt, ts, sem):
     if vid in ANALIZ_HAFIZASI:
-        return {"name": name, "vid": vid, "title": vtitle, "content": ANALIZ_HAFIZASI[vid], "cached": True}
+        return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": ANALIZ_HAFIZASI[vid]}
 
     async with sem:
         try:
-            await asyncio.sleep(4) # Kota koruması
+            await asyncio.sleep(4)
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
-            Sadece videoda konuşulan ana "Konu Başlıklarını" ve o konularda kişinin söylediği spesifik fikirleri düz metin ve madde madde yaz. Detaya girme, sadece ne dediğini özetle."""
-            
-            # Google'ın en güncel ve çalışan 2.5 modeli
+            Sadece videoda konuşulan ana "Konu Başlıklarını" ve o konularda kişinin söylediği spesifik fikirleri düz metin ve madde madde yaz."""
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
             text_content = res.text.strip()
             
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
             
-            return {"name": name, "vid": vid, "title": vtitle, "content": text_content, "cached": False}
+            return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": text_content}
         except Exception as e:
-            return {"name": name, "vid": vid, "title": vtitle, "content": f"Hata: {str(e)}", "cached": False}
+            return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": "Bağlantı Kurulamadı."}
 
 # ==========================================
-# EKSİKSİZ, ORİJİNAL TASARIM (HTML/CSS/JS)
+# HTML TASARIMI (BİREBİR AYNI - EKRAN BOZULMAZ)
 # ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -122,13 +143,13 @@ FULL_HTML_TEMPLATE = """
         .menu-toggle { left: 15px; }
         .theme-toggle { right: 15px; }
         .card { background: var(--c); border-radius: 16px; padding: 25px; margin-bottom: 25px; border: 1px solid var(--border); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05); transition: transform 0.2s; border-left: 5px solid var(--p); }
-        .card-header { margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .card-header { margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
         .badge { background: var(--p); color: white; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; text-transform: uppercase; }
         .vid-title { margin: 10px 0; font-size: 1.2rem; line-height: 1.4; color: var(--p); }
         .topic { background: rgba(128,128,128,0.05); border-radius: 8px; padding: 20px; margin-top: 15px; border: 1px solid var(--border); }
         .topic p { line-height: 1.6; }
         .topic ul { margin: 15px 0 0 0; padding-left: 20px; color: var(--t); font-size: 0.95rem; line-height: 1.7; }
-        .topic li { margin-bottom: 10px; }
+        .topic li { margin-bottom: 10px; padding: 10px; background: var(--bg); border-radius: 8px; list-style: none; border-left: 3px solid var(--border); }
         .topic b { color: var(--p); }
         input[type="text"] { width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); color: var(--t); border-radius: 8px; margin-bottom: 15px; outline: none; }
         button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; margin-bottom: 8px; color: white; transition: 0.2s; }
@@ -150,10 +171,6 @@ FULL_HTML_TEMPLATE = """
         .progress-bg { background: var(--border); height: 8px; border-radius: 10px; overflow: hidden; margin-top: 15px; }
         .progress-bar { width: 0%; height: 100%; background: var(--p); transition: width 0.4s ease, background 0.4s; }
         #p-text { font-size: 0.95rem; font-weight: 600; color: var(--t); line-height: 1.4; }
-        #aboutModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(3px); }
-        .modal-content { background: var(--c); padding: 30px; border-radius: 16px; width: 90%; max-width: 400px; text-align: center; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.2); animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        .modal-title { color: var(--p); margin-top: 0; font-size: 1.5rem; }
-        @keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
     </style>
 </head>
 <body class="dark">
@@ -166,7 +183,7 @@ FULL_HTML_TEMPLATE = """
         <span class="section-title">KİŞİ LİSTESİNDE ARA</span>
         <input type="text" id="listSearch" placeholder="Gazeteci/Kanal Bul..." onkeyup="filterList()">
         
-        <div id="u-list" style="margin: 15px 0; max-height: 35vh; overflow-y: auto; padding-right: 5px;">
+        <div id="u-list" style="margin: 15px 0; max-height: 40vh; overflow-y: auto; padding-right: 5px;">
             {CHECKS_HTML}
         </div>
         
@@ -178,14 +195,11 @@ FULL_HTML_TEMPLATE = """
         <button class="btn-p" style="margin-top:20px; padding: 15px;" onclick="run()">HABER BÜLTENİNİ HAZIRLA</button>
         
         <hr style="opacity:0.2; margin: 25px 0; border-color: var(--border);">
-        
         <button class="btn-d" style="background:#1f6feb; color:white; border:none;" onclick="toggleSpecial()">🔍 ÖZEL VİDEO ANALİZİ</button>
         <div id="specialSearchArea">
-            <input type="text" id="src" placeholder="Örn: Celal Şengör Son Video">
+            <input type="text" id="src" placeholder="Örn: Son dakika ekonomi">
             <button class="btn-s" onclick="search()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
-        
-        <button class="btn-d" style="margin-top: 15px;" onclick="toggleAbout()">Hakkımızda</button>
     </div>
 
     <div id="main">
@@ -201,16 +215,6 @@ FULL_HTML_TEMPLATE = """
         </div>
     </div>
 
-    <div id="aboutModal">
-        <div class="modal-content">
-            <h3 class="modal-title">Hakkımızda</h3>
-            <p style="color: var(--t); font-size: 1.05rem; line-height: 1.6; margin: 20px 0;">
-                Bu site, YouTube'daki güncel haberleri ve yorumları sizin için izler, birbiriyle birleştirir ve tek bir "Gazete Özeti" halinde önünüze sunar. <b>HZafer</b> tarafından geliştirilmiştir.
-            </p>
-            <button class="btn-d" style="background: var(--bg); border: 2px solid var(--border);" onclick="toggleAbout()">Kapat</button>
-        </div>
-    </div>
-
     <script>
         function toggleTheme() { document.body.classList.toggle('dark'); }
         function toggleMenu() { 
@@ -218,16 +222,8 @@ FULL_HTML_TEMPLATE = """
             else { document.getElementById('side').classList.toggle('closed'); document.getElementById('main').classList.toggle('expanded'); }
         }
         function autoCloseMenu() { if (window.innerWidth <= 768) { document.getElementById('side').classList.remove('mobile-open'); } }
-        function toggleAbout() { const modal = document.getElementById('aboutModal'); modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex'; }
         function toggleSpecial() { const area = document.getElementById('specialSearchArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }
-        
-        function filterList() { 
-            const val = document.getElementById('listSearch').value.toLowerCase(); 
-            document.querySelectorAll('.item').forEach(el => { 
-                el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; 
-            }); 
-        }
-        
+        function filterList() { const val = document.getElementById('listSearch').value.toLowerCase(); document.querySelectorAll('.item').forEach(el => { el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; }); }
         function setAll(v) { document.querySelectorAll('.ch').forEach(c => c.checked = v); }
         
         async function search() { const val = document.getElementById('src').value; if(!val) return; autoCloseMenu(); api({ q: val }); }
@@ -243,7 +239,7 @@ FULL_HTML_TEMPLATE = """
             pContainer.style.display = "block";
             pBar.style.width = "0%";
             pBar.style.background = "var(--p)";
-            pText.innerText = "Bağlantı kuruluyor...";
+            pText.innerText = "Son 3 günün videoları aranıyor...";
             
             try {
                 const response = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
@@ -264,8 +260,7 @@ FULL_HTML_TEMPLATE = """
                             const data = JSON.parse(line);
                             if (data.type === 'start') {
                                 total = data.total; 
-                                if(total === 0) { pText.innerText = "Uygun video bulunamadı."; pBar.style.width = '100%'; }
-                                else { pText.innerHTML = `🎯 <b>Toplam ${total} video kaynağı dinleniyor...</b>`; }
+                                pText.innerHTML = `🎯 <b>${total} geçerli video/kayıt bulundu. Dinleniyor...</b>`; 
                             } 
                             else if (data.type === 'progress') {
                                 completed = data.completed;
@@ -273,7 +268,7 @@ FULL_HTML_TEMPLATE = """
                                 pText.innerHTML = `🎯 <b>${completed} / ${total} video not edildi.</b><br>⏳ Son dinlenen: <span style="color:var(--muted)">${data.current_title}</span>`;
                             }
                             else if (data.type === 'synthesizing') {
-                                pText.innerHTML = `🧠 <b>Tüm videolar dinlendi!</b><br>✨ Yapay Zeka şimdi olayları grupluyor ve "Günün Özetini" yazıyor...`;
+                                pText.innerHTML = `🧠 <b>Notlar tamamlandı!</b><br>✨ Yapay Zeka şimdi tarihleri karşılaştırıp "Günün Manşetlerini" yazıyor...`;
                                 pBar.style.background = "#1f6feb";
                             }
                             else if (data.type === 'result') {
@@ -281,11 +276,11 @@ FULL_HTML_TEMPLATE = """
                                 pBar.style.background = "var(--p)";
                                 if (data.html) { box.innerHTML = data.html; }
                             }
-                        } catch(err) { console.error("JSON Parse Hatası:", err); }
+                        } catch(err) {}
                     }
                 }
                 setTimeout(() => { pContainer.style.display = 'none'; }, 4000);
-            } catch(e) { pText.innerText = "Bağlantı hatası oluştu."; console.error(e); }
+            } catch(e) { pText.innerText = "Bağlantı hatası oluştu."; }
         }
     </script>
 </body>
@@ -301,74 +296,95 @@ def index():
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         vids_to_process = []
+        secilen_isimler = []
+        
         if req.q:
-            vids = get_recent_vids(req.q, 1)
-            for vid, title in vids:
-                vids_to_process.append({"name": "Özel Arama", "vid": vid, "title": title})
+            vids = get_recent_vids(req.q, 3)
+            secilen_isimler.append("Özel Arama")
+            for vid, title, dt, ts in vids:
+                vids_to_process.append({"name": "Özel Arama", "vid": vid, "title": title, "dt": dt, "ts": ts})
         else:
             for uid in req.ids:
                 user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
                 if user:
-                    vids = get_recent_vids(user["url"], 1)
-                    for vid, title in vids:
-                        vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
+                    secilen_isimler.append(user["ad"])
+                    vids = get_recent_vids(user["url"], 3)
+                    if not vids:
+                        # Son 3 günde video atmayanlar
+                        vids_to_process.append({"name": user["ad"], "vid": None, "title": "VİDEO YOK", "dt": None, "ts": 0})
+                    else:
+                        for vid, title, dt, ts in vids:
+                            vids_to_process.append({"name": user["ad"], "vid": vid, "title": title, "dt": dt, "ts": ts})
         
-        yield f"{json.dumps({'type': 'start', 'total': len(vids_to_process)})}\n"
+        # Sadece videosu olanlar progress bar'da sayılsın
+        aktif_video_sayisi = len([v for v in vids_to_process if v['vid'] is not None])
+        yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
         sem = asyncio.Semaphore(1)
-        tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
+        
+        async def process_wrapper(v):
+            if v["vid"] is None:
+                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "KAYIT BULUNAMADI: Son 3 gün içinde YouTube'a video yüklemedi."}
+            return await process_video(v["name"], v["vid"], v["title"], v["dt"], v["ts"], sem)
+            
+        tasks = [process_wrapper(v) for v in vids_to_process]
         
         toplanmis_notlar = []
         completed = 0
         
-        # 2. VİDEOLARI TEK TEK OKU VE NOT AL (UI'a sadece progress bildir, html basma)
         for coro in asyncio.as_completed(tasks):
             res = await coro
-            completed += 1
-            toplanmis_notlar.append(f"KAYNAK ({res['name']}): {res['content']}")
-            yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title']})}\n"
-            
-        # 3. YZ'YA TÜM NOTLARI VERİP SENTEZLEME YAPTIR (Arayüze "Sentezleniyor" sinyali gönder)
+            if res.get("dt"):
+                completed += 1
+                toplanmis_notlar.append(f"KAYNAK ({res['name']}) [Yayın Tarihi: {res['dt']}]: {res['content']}")
+                yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title']})}\n"
+            else:
+                toplanmis_notlar.append(f"KAYNAK ({res['name']}): {res['content']}")
+                
         yield f"{json.dumps({'type': 'synthesizing'})}\n"
         
+        isim_listesi_str = ", ".join(secilen_isimler)
         sentez_prompt = f"""
-        Aşağıda Türkiye'deki çeşitli gazetecilerin/kanalların son videolarından çıkarılmış notlar var.
+        Aşağıda Türkiye'deki gazetecilerin son 3 gün içindeki videolarından notlar var.
         Senden istediğim bunları KİŞİLERE GÖRE DEĞİL, KONULARA (OLAYLARA) GÖRE BİRLEŞTİRMEN.
 
-        Lütfen şu HTML formatını kullanarak bir "Günün Bülteni" hazırla:
+        Tüm Seçilen Kişiler Listesi: {isim_listesi_str}
+
+        ÇOK ÖNEMLİ KURALLAR:
+        1. Gündem maddelerini (konuları) en güncel (en son bahsedilen) olay en üstte olacak şekilde sırala.
+        2. Her konunun altında "Kim Ne Dedi?" listesinde, YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HERKES eksiksiz yer almalıdır.
+        3. Bir kişi o konu hakkında konuşmuşsa yanına yayınlanma tarihini parantez içinde "(Tarih Saat)" ekle ve EN GÜNCEL tarihli olanları listenin üstüne koy. Örn: <li><b>Fatih Altaylı (15.05.2024 14:30):</b> ...</li>
+        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, o spesifik konu hakkında videolarında hiçbir şey söylememişse VEYA "Son 3 gün içinde YouTube'a video yüklemedi" notu varsa, O KİŞİYİ DE LİSTEYE EKLE VE YANINA AYNEN ŞUNU YAZ: "Bu konu hakkında değerlendirmesi veya bilgisi bulunmuyor." (Bu kişileri listenin en altına koy).
+
+        Lütfen şu HTML formatını kullanarak hazırla (Sadece saf HTML kodu ver, markdown kullanma):
 
         <div class='card'>
-            <div class='card-header'><span class='badge' style='background:#1f6feb;'>GÜNDEM MADDESİ</span></div>
+            <div class='card-header'>
+                <span class='badge' style='background:#1f6feb;'>GÜNDEM MADDESİ</span>
+            </div>
             <h3 class='vid-title'>📌 [Ortak Konu / Olayın Adı]</h3>
             <div class='topic'>
                 <p style='margin-top:0; color:var(--t); font-weight:bold; font-size:1.1rem;'>Olay Nedir?</p>
-                <p style='color:var(--muted); font-size:0.95rem;'>[Olayın tarafsız, anlaşılır, kısa bir özeti]</p>
+                <p style='color:var(--muted); font-size:0.95rem;'>[Olayın tarafsız özeti]</p>
                 <hr style='border:none; border-top:1px solid var(--border); margin:15px 0;'>
                 <p style='margin-top:0; color:var(--t); font-weight:bold; font-size:1.1rem;'>Kim Ne Dedi?</p>
                 <ul>
-                    <li><b>[Gazeteci Adı]:</b> [Ne dediği/Yorumu]</li>
-                    <li><b>[Diğer Gazeteci Adı]:</b> [Ne dediği/Yorumu]</li>
+                    <li><b>[Kişi Adı] (Tarih/Saat):</b> [Ne dediği]</li>
+                    <li><b>[Sessiz Kalan Kişi Adı]:</b> Bu konu hakkında değerlendirmesi veya bilgisi bulunmuyor.</li>
                 </ul>
             </div>
         </div>
 
-        Eğer aynı konudan birden fazla kişi bahsetmişse "Kim Ne Dedi" listesine hepsini alt alta ekle.
-        Sadece 1 kişi bahsetmiş olsa bile formata uydur.
-        Birden fazla konu varsa yukarıdaki <div class='card'> yapısını çoğaltarak tüm gündemleri dök.
-        Markdown (```html) kullanma, sadece saf HTML kodu üret.
-
-        İŞTE NOTLAR:
+        İŞTE TOPLANAN NOTLAR:
         {" ".join(toplanmis_notlar)}
         """
 
         try:
             final_res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=sentez_prompt)
             final_html = final_res.text.replace('```html', '').replace('```', '').strip()
-            
-            # 4. SONUCU EKRANA BAS
             yield f"{json.dumps({'type': 'result', 'html': final_html})}\n"
         except Exception as e:
-            err_html = f"<div class='card' style='border-color:red;'><h3 class='vid-title' style='color:red;'>Hata Oluştu</h3><p>Sentezleme sırasında hata yaşandı: {str(e)}</p></div>"
+            err_html = f"<div class='card' style='border-color:red;'><h3 class='vid-title' style='color:red;'>Hata Oluştu</h3><p>{str(e)}</p></div>"
             yield f"{json.dumps({'type': 'result', 'html': err_html})}\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
