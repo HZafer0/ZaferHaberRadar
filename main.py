@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from google import genai
 from typing import List
 
-# API anahtarı Render üzerinden çekilecek (Güvenlik için GitHub'a şifreyi açık yazmamaya çalış)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "BURAYA_API_ANAHTARINI_YAZ")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
@@ -48,7 +47,7 @@ def get_recent_vids(query, count=1):
 async def process_video(name, vid, vtitle, sem):
     async with sem:
         try:
-            # KOTA DOLMAMASI İÇİN BEKLEME SÜRESİNİ 4 SANİYEYE ÇIKARDIK
+            # Saniyede atılan istek sayısını yavaşlatıyoruz ki Google bizi engellemesin
             await asyncio.sleep(4) 
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}.
             LÜTFEN TÜM VİDEOYU ÖZETLEME! Sadece videoda konuşulan ana "Konu Başlıklarını" bul.
@@ -73,7 +72,6 @@ async def process_video(name, vid, vtitle, sem):
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception as e:
-            # Hata olursa kırmızı kart gösterecek
             err_html = f"<div class='card' style='border-left: 5px solid red;'><div class='card-header'><span class='badge' style='background:red;'>HATA</span></div><h3 class='vid-title'>{vtitle}</h3><p style='color:red;'>⚠️ Bu videonun analizi sırasında bir hata oluştu. (Yapay zeka yanıt veremedi veya API kotası doldu)</p></div>"
             return {"type": "result", "html": err_html, "current_title": vtitle}
 
@@ -89,22 +87,16 @@ def index():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ZAFER HABER RADARI</title>
         <link rel="icon" type="image/png" href="/logo.png">
-        
         <style>
             :root {{ --p: #ff4757; --bg: #f8fafc; --c: #ffffff; --t: #0f172a; --border: #e2e8f0; --muted: #64748b; }}
             body.dark {{ --bg: #0b0f19; --c: #161b2a; --t: #e2e8f0; --border: #30363d; --muted: #8b949e; }}
-            
             ::-webkit-scrollbar {{ width: 0px; background: transparent; }}
             * {{ scrollbar-width: none; box-sizing: border-box; }}
-            
             body {{ font-family: 'Segoe UI', system-ui, sans-serif; margin:0; background: var(--bg); color: var(--t); display: flex; transition: background 0.3s, color 0.3s; overflow-x: hidden; min-height: 100vh; }}
-            
             #side {{ width: 320px; height: 100vh; background: var(--c); border-right: 1px solid var(--border); position: fixed; padding: 70px 20px 25px 20px; overflow-y: auto; z-index: 100; box-shadow: 2px 0 10px rgba(0,0,0,0.05); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); transform: translateX(0); }}
             #side.closed {{ transform: translateX(-100%); }}
-            
             #main {{ margin-left: 320px; padding: 70px 40px 40px 40px; flex: 1; max-width: 1100px; transition: margin-left 0.4s cubic-bezier(0.4, 0, 0.2, 1); }}
             #main.expanded {{ margin-left: 0; max-width: 900px; margin: 0 auto; }}
-            
             @media (max-width: 768px) {{
                 #side {{ transform: translateX(-100%); width: 280px; box-shadow: 5px 0 25px rgba(0,0,0,0.2); }}
                 #side.mobile-open {{ transform: translateX(0); }}
@@ -113,34 +105,27 @@ def index():
                 .menu-toggle {{ left: 10px; }}
                 .theme-toggle {{ right: 10px; }}
             }}
-            
             .top-btn {{ position: fixed; top: 15px; width: 45px; height: 45px; border-radius: 12px; background: var(--c); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; font-size: 1.4rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05); color: var(--t); transition: 0.2s; }}
             .top-btn:hover {{ background: var(--border); }}
             .menu-toggle {{ left: 15px; }}
             .theme-toggle {{ right: 15px; }}
-            
             .card {{ background: var(--c); border-radius: 16px; padding: 25px; margin-bottom: 25px; border: 1px solid var(--border); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05); transition: transform 0.2s; border-left: 5px solid var(--p); }}
             .card-header {{ margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }}
             .badge {{ background: var(--p); color: white; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; text-transform: uppercase; }}
             .vid-title {{ margin: 10px 0; font-size: 1.2rem; line-height: 1.4; }}
-            
             .topic {{ background: rgba(128,128,128,0.05); border-radius: 8px; padding: 15px; margin-top: 15px; border-left: 3px solid var(--p); }}
             .topic-title {{ margin: 0 0 10px 0; font-size: 1.05rem; color: var(--t); }}
             .topic ul {{ margin: 0; padding-left: 20px; color: var(--muted); font-size: 0.95rem; line-height: 1.6; }}
             .topic li {{ margin-bottom: 5px; }}
-            
             .source-link {{ display: inline-block; margin-top: 20px; font-size: 0.85rem; color: var(--muted); text-decoration: none; opacity: 0.6; font-weight: 600; transition: 0.2s; }}
             .source-link:hover {{ opacity: 1; color: var(--p); }}
-            
             input[type="text"] {{ width: 100%; padding: 12px; background: var(--bg); border: 1px solid var(--border); color: var(--t); border-radius: 8px; margin-bottom: 15px; outline: none; }}
             button {{ width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; margin-bottom: 8px; color: white; transition: 0.2s; }}
             .btn-p {{ background: linear-gradient(135deg, #ff4757, #ff6b81); }}
             .btn-s {{ background: #238636; margin-top: 5px; }}
             .btn-d {{ background: var(--bg); border: 1px solid var(--border); color: var(--t); font-size: 0.85rem; }}
-            
             #specialSearchArea {{ margin: 20px 0; padding: 15px; background: var(--c); border-radius: 12px; border: 1px solid var(--border); display: none; }}
             .section-title {{ font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--muted); margin: 20px 0 10px 0; display: block; }}
-            
             .item {{ padding: 12px 10px; border-bottom: 1px solid var(--border); font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-radius: 8px; transition: background 0.2s; user-select: none; }}
             .item:hover {{ background: rgba(128,128,128,0.05); }}
             .item-text {{ font-weight: 500; color: var(--t); }}
@@ -150,12 +135,10 @@ def index():
             .item input:checked ~ .checkmark {{ background-color: var(--p); border-color: var(--p); }}
             .checkmark:after {{ content: ""; display: none; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); margin-bottom: 2px; }}
             .item input:checked ~ .checkmark:after {{ display: block; }}
-
             #progress-container {{ display: none; margin-bottom: 30px; background: var(--c); padding: 20px; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }}
             .progress-bg {{ background: var(--border); height: 8px; border-radius: 10px; overflow: hidden; margin-top: 15px; }}
             .progress-bar {{ width: 0%; height: 100%; background: var(--p); transition: width 0.4s ease; }}
             #p-text {{ font-size: 0.95rem; font-weight: 600; color: var(--t); line-height: 1.4; }}
-            
             #aboutModal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(3px); }}
             .modal-content {{ background: var(--c); padding: 30px; border-radius: 16px; width: 90%; max-width: 400px; text-align: center; border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,0.2); animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }}
             .modal-title {{ color: var(--p); margin-top: 0; font-size: 1.5rem; }}
@@ -168,27 +151,20 @@ def index():
 
         <div id="side">
             <h2 style="color:var(--p); margin:0; font-size: 1.8rem; margin-bottom: 15px;">ZAFER RADARI</h2>
-            
             <span class="section-title">KİŞİ LİSTESİNDE ARA</span>
             <input type="text" id="listSearch" placeholder="Gazeteci/Kanal Bul..." onkeyup="filterList()">
-            
             <div id="u-list" style="margin: 15px 0; max-height: 35vh; overflow-y: auto; padding-right: 5px;">{checks}</div>
-            
             <div style="display:flex; gap:10px;">
                 <button class="btn-d" onclick="setAll(true)">Tümünü Seç</button>
                 <button class="btn-d" onclick="setAll(false)">Temizle</button>
             </div>
-
             <button class="btn-p" style="margin-top:20px; padding: 15px;" onclick="run()">RADARI BAŞLAT</button>
-
             <hr style="opacity:0.2; margin: 25px 0; border-color: var(--border);">
-
             <button class="btn-d" style="background:#1f6feb; color:white; border:none;" onclick="toggleSpecial()">🔍 ÖZEL VİDEO ANALİZİ</button>
             <div id="specialSearchArea">
                 <input type="text" id="src" placeholder="Örn: Celal Şengör Son Video">
                 <button class="btn-s" onclick="search()">ŞİMDİ ARA VE ANALİZ ET</button>
             </div>
-            
             <button class="btn-d" style="margin-top: 15px;" onclick="toggleAbout()">Hakkımızda</button>
         </div>
 
@@ -197,7 +173,6 @@ def index():
                 <div id="p-text">Hedefler taranıyor...</div>
                 <div class="progress-bg"><div class="progress-bar" id="p-bar"></div></div>
             </div>
-
             <div id="box">
                 <div style="text-align:center; margin-top:15vh; opacity:0.4;">
                     <h2 style="font-size: 2rem;">Radar Beklemede</h2>
@@ -220,52 +195,18 @@ def index():
             function toggleTheme() {{ document.body.classList.toggle('dark'); }}
             
             function toggleMenu() {{ 
-                if (window.innerWidth <= 768) {{
-                    document.getElementById('side').classList.toggle('mobile-open');
-                }} else {{
-                    document.getElementById('side').classList.toggle('closed');
-                    document.getElementById('main').classList.toggle('expanded');
-                }}
+                if (window.innerWidth <= 768) {{ document.getElementById('side').classList.toggle('mobile-open'); }}
+                else {{ document.getElementById('side').classList.toggle('closed'); document.getElementById('main').classList.toggle('expanded'); }}
             }}
             
-            function autoCloseMenu() {{
-                if (window.innerWidth <= 768) {{
-                    document.getElementById('side').classList.remove('mobile-open');
-                }}
-            }}
-
-            function toggleAbout() {{
-                const modal = document.getElementById('aboutModal');
-                modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex';
-            }}
-            
-            function toggleSpecial() {{
-                const area = document.getElementById('specialSearchArea');
-                area.style.display = area.style.display === 'block' ? 'none' : 'block';
-            }}
-            
-            function filterList() {{
-                const val = document.getElementById('listSearch').value.toLowerCase();
-                document.querySelectorAll('.item').forEach(el => {{
-                    el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none';
-                }});
-            }}
-            
+            function autoCloseMenu() {{ if (window.innerWidth <= 768) {{ document.getElementById('side').classList.remove('mobile-open'); }} }}
+            function toggleAbout() {{ const modal = document.getElementById('aboutModal'); modal.style.display = modal.style.display === 'flex' ? 'none' : 'flex'; }}
+            function toggleSpecial() {{ const area = document.getElementById('specialSearchArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }}
+            function filterList() {{ const val = document.getElementById('listSearch').value.toLowerCase(); document.querySelectorAll('.item').forEach(el => {{ el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; }}); }}
             function setAll(v) {{ document.querySelectorAll('.ch').forEach(c => c.checked = v); }}
             
-            async function search() {{
-                const val = document.getElementById('src').value;
-                if(!val) return;
-                autoCloseMenu();
-                api({{ q: val }});
-            }}
-
-            async function run() {{
-                const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value);
-                if(ids.length === 0) return alert("Lütfen en az bir kişi seçin!");
-                autoCloseMenu();
-                api({{ ids: ids }});
-            }}
+            async function search() {{ const val = document.getElementById('src').value; if(!val) return; autoCloseMenu(); api({{ q: val }}); }}
+            async function run() {{ const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value); if(ids.length === 0) return alert("Lütfen en az bir kişi seçin!"); autoCloseMenu(); api({{ ids: ids }}); }}
 
             async function api(body) {{
                 const box = document.getElementById('box');
@@ -279,24 +220,14 @@ def index():
                 pText.innerText = "Bağlantı kuruluyor...";
                 
                 try {{
-                    const response = await fetch('/api/analyze', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify(body)
-                    }});
-
+                    const response = await fetch('/api/analyze', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(body) }});
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder("utf-8");
-                    let completed = 0;
-                    let total = 0;
-                    let pendingVids = []; 
-                    
-                    let buffer = ""; 
+                    let completed = 0; let total = 0; let pendingVids = []; let buffer = ""; 
 
                     while (true) {{
                         const {{ done, value }} = await reader.read();
                         if (done) break;
-
                         buffer += decoder.decode(value, {{stream: true}});
                         const lines = buffer.split('\\n');
                         buffer = lines.pop(); 
@@ -305,46 +236,22 @@ def index():
                             if (!line.trim()) continue;
                             try {{
                                 const data = JSON.parse(line);
-                                
                                 if (data.type === 'start') {{
-                                    total = data.total;
-                                    pendingVids = data.vids; 
-                                    
-                                    if(total === 0) {{
-                                        pText.innerText = "Uygun video bulunamadı.";
-                                        pBar.style.width = '100%';
-                                    }} else {{
-                                        pText.innerHTML = `🎯 <b>Toplam ${{total}} hedef bulundu.</b><br>⏳ Şu an analiz ediliyor: <span style="color:var(--p)">${{pendingVids[0].name}} - ${{pendingVids[0].title}}</span>`;
-                                    }}
-                                }} 
-                                else if (data.type === 'result') {{
-                                    completed++;
-                                    let pct = Math.round((completed / total) * 100);
-                                    pBar.style.width = pct + '%';
-                                    
+                                    total = data.total; pendingVids = data.vids; 
+                                    if(total === 0) {{ pText.innerText = "Uygun video bulunamadı."; pBar.style.width = '100%'; }}
+                                    else {{ pText.innerHTML = `🎯 <b>Toplam ${{total}} hedef bulundu.</b><br>⏳ Şu an analiz ediliyor: <span style="color:var(--p)">${{pendingVids[0].name}} - ${{pendingVids[0].title}}</span>`; }}
+                                }} else if (data.type === 'result') {{
+                                    completed++; pBar.style.width = Math.round((completed / total) * 100) + '%';
                                     pendingVids = pendingVids.filter(v => v.title !== data.current_title);
-                                    
-                                    if (pendingVids.length > 0) {{
-                                        pText.innerHTML = `🎯 <b>${{completed}} / ${{total}} video tamamlandı.</b><br>⏳ Şu an analiz ediliyor: <span style="color:var(--p)">${{pendingVids[0].name}} - ${{pendingVids[0].title}}</span>`;
-                                    }} else {{
-                                        pText.innerHTML = "✅ <b>Tüm analizler başarıyla tamamlandı!</b>";
-                                    }}
-
-                                    if (data.html && data.html.trim() !== "") {{
-                                        box.insertAdjacentHTML('afterbegin', data.html);
-                                    }}
+                                    if (pendingVids.length > 0) {{ pText.innerHTML = `🎯 <b>${{completed}} / ${{total}} video tamamlandı.</b><br>⏳ Şu an analiz ediliyor: <span style="color:var(--p)">${{pendingVids[0].name}} - ${{pendingVids[0].title}}</span>`; }}
+                                    else {{ pText.innerHTML = "✅ <b>Tüm analizler başarıyla tamamlandı!</b>"; }}
+                                    if (data.html && data.html.trim() !== "") {{ box.insertAdjacentHTML('afterbegin', data.html); }}
                                 }}
-                            }} catch(err) {{ 
-                                console.error("JSON Parse Hatası:", err, "Gelen satır:", line); 
-                            }}
+                            }} catch(err) {{ console.error("JSON Parse Hatası:", err, "Gelen satır:", line); }}
                         }}
                     }}
                     setTimeout(() => {{ pContainer.style.display = 'none'; }}, 4000);
-                    
-                }} catch(e) {{ 
-                    pText.innerText = "Bağlantı hatası oluştu.";
-                    console.error(e);
-                }}
+                }} catch(e) {{ pText.innerText = "Bağlantı hatası oluştu."; console.error(e); }}
             }}
         </script>
     </body>
@@ -355,7 +262,6 @@ def index():
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         vids_to_process = []
-        
         if req.q:
             vids = get_recent_vids(req.q, 1)
             for vid, title in vids:
@@ -370,7 +276,7 @@ async def analyze_videos(req: AnalizRequest):
         
         yield f"{json.dumps({'type': 'start', 'total': len(vids_to_process), 'vids': vids_to_process})}\n"
         
-        # AYNI ANDA SADECE 1 İŞLEM YAPMASI İÇİN SEMAPHORE DEĞERİNİ 1'E DÜŞÜRDÜK
+        # AYNI ANDA 1 İŞLEM YAPILACAK (Google'ı boğmamak için)
         sem = asyncio.Semaphore(1)
         tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
         for coro in asyncio.as_completed(tasks):
