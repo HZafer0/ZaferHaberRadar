@@ -70,7 +70,7 @@ async def process_video(name, vid, vtitle, sem):
             </div>
             Birden fazla konu varsa <div class='topic'> kısmını çoğalt.
             """
-            res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
+            res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception:
@@ -389,3 +389,4 @@ async def analyze_videos(req: AnalizRequest):
             yield f"{json.dumps(res)}\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
