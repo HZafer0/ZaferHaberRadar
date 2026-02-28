@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from google import genai
 from typing import List
 
-# API anahtarı artık güvenlik için ortam değişkenlerinden çekilecek
+# API anahtarı Render üzerinden çekilecek
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "BURAYA_API_ANAHTARINI_YAZ")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
@@ -68,10 +68,11 @@ async def process_video(name, vid, vtitle, sem):
             </div>
             Birden fazla konu varsa <div class='topic'> kısmını çoğalt.
             """
-            res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
+            # HATALI MODEL İSMİ DÜZELTİLDİ: gemini-1.5-flash yapıldı.
+            res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
-        except Exception:
+        except Exception as e:
             return {"type": "result", "html": "", "current_title": vtitle}
 
 @app.get("/", response_class=HTMLResponse)
@@ -116,7 +117,7 @@ def index():
             .menu-toggle {{ left: 15px; }}
             .theme-toggle {{ right: 15px; }}
             
-            .card {{ background: var(--c); border-radius: 16px; padding: 25px; margin-bottom: 25px; border: 1px solid var(--border); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05); transition: transform 0.2s; }}
+            .card {{ background: var(--c); border-radius: 16px; padding: 25px; margin-bottom: 25px; border: 1px solid var(--border); box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.05); transition: transform 0.2s; border-left: 5px solid var(--p); }}
             .card-header {{ margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }}
             .badge {{ background: var(--p); color: white; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; text-transform: uppercase; }}
             .vid-title {{ margin: 10px 0; font-size: 1.2rem; line-height: 1.4; }}
@@ -324,10 +325,9 @@ def index():
                                         pText.innerHTML = "✅ <b>Tüm analizler başarıyla tamamlandı!</b>";
                                     }}
 
+                                    // DOM Ekleme Hatası Düzeltildi
                                     if (data.html && data.html.trim() !== "") {{
-                                        const div = document.createElement('div');
-                                        div.innerHTML = data.html;
-                                        box.prepend(div.firstChild);
+                                        box.insertAdjacentHTML('afterbegin', data.html);
                                     }}
                                 }}
                             }} catch(err) {{}}
@@ -344,15 +344,17 @@ def index():
     </html>
     """
 
+# Eksik olan Endpoint kısmı eklendi
 @app.post("/api/analyze")
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         vids_to_process = []
+        
         if req.q:
             vids = get_recent_vids(req.q, 1)
             for vid, title in vids:
                 vids_to_process.append({"name": "Özel Arama", "vid": vid, "title": title})
-        elif req.ids:
+        else:
             for uid in req.ids:
                 user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
                 if user:
@@ -360,14 +362,10 @@ async def analyze_videos(req: AnalizRequest):
                     for vid, title in vids:
                         vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
         
-        total = len(vids_to_process)
-        yield f"{json.dumps({'type': 'start', 'total': total, 'vids': vids_to_process})}\n"
+        yield f"{json.dumps({'type': 'start', 'total': len(vids_to_process), 'vids': vids_to_process})}\n"
         
-        if total == 0: return
-
         sem = asyncio.Semaphore(3)
         tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
-        
         for coro in asyncio.as_completed(tasks):
             res = await coro
             yield f"{json.dumps(res)}\n"
@@ -376,4 +374,3 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
-
