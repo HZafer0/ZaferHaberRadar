@@ -9,9 +9,7 @@ from pydantic import BaseModel
 from google import genai
 from typing import List
 
-# API anahtarı artık güvenlik için ortam değişkenlerinden çekilecek (Render.com ayarlarından vereceğiz)
-# Eğer bilgisayarında test ediyorsan, "BURAYA_API_ANAHTARINI_YAZ" yerine kendi anahtarını yapıştırabilirsin.
-# GitHub'a yüklemeden önce bu satırı eski haline getirmeyi unutma!
+# API anahtarı artık güvenlik için ortam değişkenlerinden çekilecek
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "BURAYA_API_ANAHTARINI_YAZ")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
@@ -70,7 +68,7 @@ async def process_video(name, vid, vtitle, sem):
             </div>
             Birden fazla konu varsa <div class='topic'> kısmını çoğalt.
             """
-            res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
+            res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception:
@@ -79,9 +77,6 @@ async def process_video(name, vid, vtitle, sem):
 @app.get("/", response_class=HTMLResponse)
 def index():
     checks = "".join([f'<label class="item" data-name="{u["ad"].lower()}"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>' for u in UNLU_LISTESI])
-    
-    # Yeni logonun favicon olarak eklendiği kısım:
-    # Logonun internetteki Render.com sunucusunda otomatik olarak görünmesi için logoyu GitHub reposunda 'logo.png' olarak bulunduracağız.
     
     return f"""
     <!DOCTYPE html>
@@ -348,7 +343,8 @@ def index():
     </body>
     </html>
     """
-    @app.post("/api/analyze")
+
+@app.post("/api/analyze")
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         vids_to_process = []
