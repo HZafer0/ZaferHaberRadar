@@ -67,20 +67,15 @@ def get_recent_vids(query, count=1):
     except: return []
 
 async def process_video(name, vid, vtitle, sem):
-    # 1) HAFIZA KONTROLÜ: Eğer bu video daha önce analiz edildiyse, hemen hafızadan ver!
     if vid in ANALIZ_HAFIZASI:
         return {"type": "result", "html": ANALIZ_HAFIZASI[vid], "current_title": f"{vtitle} (Hafızadan)"}
 
-    # 2) EĞER YENİ VİDEOYSA: Analiz et ve hafızaya ekle
     async with sem:
         try:
-            # Google'ı boğmamak için yeni videolarda 4 saniye bekle
             await asyncio.sleep(4) 
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}.
             LÜTFEN TÜM VİDEOYU ÖZETLEME! Sadece videoda konuşulan ana "Konu Başlıklarını" bul.
             Her konunun altına o kişinin o konuda söylediği en önemli, çarpıcı şeyleri ve fikirleri madde madde yaz.
-            Gereksiz detaylara veya "Videoda şunlardan bahsediliyor" gibi giriş cümlelerine girme.
-            
             SADECE şu HTML yapısını döndür (markdown kullanma):
             <div class='card'>
                 <div class='card-header'><span class='badge'>{name}</span></div>
@@ -93,18 +88,18 @@ async def process_video(name, vid, vtitle, sem):
                 </div>
                 <a href='https://youtube.com/watch?v={vid}' target='_blank' class='source-link'>🔗 Orijinal Videoya Git</a>
             </div>
-            Birden fazla konu varsa <div class='topic'> kısmını çoğalt.
             """
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             
-            # Başarılı analizi anında hafızaya kaydet
             ANALIZ_HAFIZASI[vid] = html
             hafiza_kaydet(ANALIZ_HAFIZASI)
             
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception as e:
-            err_html = f"<div class='card' style='border-left: 5px solid red;'><div class='card-header'><span class='badge' style='background:red;'>HATA</span></div><h3 class='vid-title'>{vtitle}</h3><p style='color:red;'>⚠️ Bu videonun analizi sırasında bir hata oluştu. (Yapay zeka yanıt veremedi veya API kotası doldu)</p></div>"
+            # İŞTE BURAYI DEĞİŞTİRDİM! ARTIK GERÇEK HATAYI EKRANA YAZDIRACAK.
+            gercek_hata = str(e)
+            err_html = f"<div class='card' style='border-left: 5px solid red;'><div class='card-header'><span class='badge' style='background:red;'>SİSTEM HATASI</span></div><h3 class='vid-title'>{vtitle}</h3><p style='color:red;'>⚠️ <b>HATA DETAYI:</b> {gercek_hata}</p></div>"
             return {"type": "result", "html": err_html, "current_title": vtitle}
 
 # ==========================================
@@ -305,9 +300,7 @@ FULL_HTML_TEMPLATE = """
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    # Menüdeki kişileri HTML olarak hazırlıyoruz (Arama filtresi çalışsın diye data-name eklendi)
     checks_html = "".join([f'<label class="item" data-name="{u["ad"].lower()}"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>' for u in UNLU_LISTESI])
-    # Şablonun içine yerleştiriyoruz
     return FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
 
 @app.post("/api/analyze")
@@ -328,7 +321,6 @@ async def analyze_videos(req: AnalizRequest):
         
         yield f"{json.dumps({'type': 'start', 'total': len(vids_to_process), 'vids': vids_to_process})}\n"
         
-        # Google'ı yormamak için aynı anda maksimum 1 işlem kilit sistemi
         sem = asyncio.Semaphore(1)
         tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
         for coro in asyncio.as_completed(tasks):
