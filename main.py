@@ -9,8 +9,8 @@ from pydantic import BaseModel
 from google import genai
 from typing import List
 
-# API anahtarı Render üzerinden çekilecek
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCySW3DQ7M7TkGT3wzsF7muyx3hRAxAU9Y")
+# API anahtarı Render üzerinden çekilecek (Güvenlik için GitHub'a şifreyi açık yazmamaya çalış)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "BURAYA_API_ANAHTARINI_YAZ")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
 
@@ -48,7 +48,8 @@ def get_recent_vids(query, count=1):
 async def process_video(name, vid, vtitle, sem):
     async with sem:
         try:
-            await asyncio.sleep(1)
+            # KOTA DOLMAMASI İÇİN BEKLEME SÜRESİNİ 4 SANİYEYE ÇIKARDIK
+            await asyncio.sleep(4) 
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}.
             LÜTFEN TÜM VİDEOYU ÖZETLEME! Sadece videoda konuşulan ana "Konu Başlıklarını" bul.
             Her konunun altına o kişinin o konuda söylediği en önemli, çarpıcı şeyleri ve fikirleri madde madde yaz.
@@ -72,7 +73,7 @@ async def process_video(name, vid, vtitle, sem):
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception as e:
-            # EĞER HATA OLURSA SESSİZCE GEÇME, EKRANA HATA KARTI BAS
+            # Hata olursa kırmızı kart gösterecek
             err_html = f"<div class='card' style='border-left: 5px solid red;'><div class='card-header'><span class='badge' style='background:red;'>HATA</span></div><h3 class='vid-title'>{vtitle}</h3><p style='color:red;'>⚠️ Bu videonun analizi sırasında bir hata oluştu. (Yapay zeka yanıt veremedi veya API kotası doldu)</p></div>"
             return {"type": "result", "html": err_html, "current_title": vtitle}
 
@@ -290,20 +291,14 @@ def index():
                     let total = 0;
                     let pendingVids = []; 
                     
-                    // YENİ: Parçalanmış veriyi birleştirmek için tampon (buffer) bellek
                     let buffer = ""; 
 
                     while (true) {{
                         const {{ done, value }} = await reader.read();
                         if (done) break;
 
-                        // Gelen parçayı string'e çevirip tampona ekliyoruz
                         buffer += decoder.decode(value, {{stream: true}});
-                        
-                        // Tamponu satır satır bölüyoruz
                         const lines = buffer.split('\\n');
-                        
-                        // En son satır muhtemelen yarım kalmıştır, onu tamponda tutmaya devam ediyoruz
                         buffer = lines.pop(); 
 
                         for (let line of lines) {{
@@ -375,7 +370,8 @@ async def analyze_videos(req: AnalizRequest):
         
         yield f"{json.dumps({'type': 'start', 'total': len(vids_to_process), 'vids': vids_to_process})}\n"
         
-        sem = asyncio.Semaphore(3)
+        # AYNI ANDA SADECE 1 İŞLEM YAPMASI İÇİN SEMAPHORE DEĞERİNİ 1'E DÜŞÜRDÜK
+        sem = asyncio.Semaphore(1)
         tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
         for coro in asyncio.as_completed(tasks):
             res = await coro
@@ -385,4 +381,3 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
-
