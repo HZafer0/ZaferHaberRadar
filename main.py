@@ -68,12 +68,13 @@ async def process_video(name, vid, vtitle, sem):
             </div>
             Birden fazla konu varsa <div class='topic'> kısmını çoğalt.
             """
-            # HATALI MODEL İSMİ DÜZELTİLDİ: gemini-1.5-flash yapıldı.
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             return {"type": "result", "html": html, "current_title": vtitle}
         except Exception as e:
-            return {"type": "result", "html": "", "current_title": vtitle}
+            # EĞER HATA OLURSA SESSİZCE GEÇME, EKRANA HATA KARTI BAS
+            err_html = f"<div class='card' style='border-left: 5px solid red;'><div class='card-header'><span class='badge' style='background:red;'>HATA</span></div><h3 class='vid-title'>{vtitle}</h3><p style='color:red;'>⚠️ Bu videonun analizi sırasında bir hata oluştu. (Yapay zeka yanıt veremedi veya API kotası doldu)</p></div>"
+            return {"type": "result", "html": err_html, "current_title": vtitle}
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -288,13 +289,22 @@ def index():
                     let completed = 0;
                     let total = 0;
                     let pendingVids = []; 
+                    
+                    // YENİ: Parçalanmış veriyi birleştirmek için tampon (buffer) bellek
+                    let buffer = ""; 
 
                     while (true) {{
                         const {{ done, value }} = await reader.read();
                         if (done) break;
 
-                        const chunk = decoder.decode(value, {{stream: true}});
-                        const lines = chunk.split('\\n');
+                        // Gelen parçayı string'e çevirip tampona ekliyoruz
+                        buffer += decoder.decode(value, {{stream: true}});
+                        
+                        // Tamponu satır satır bölüyoruz
+                        const lines = buffer.split('\\n');
+                        
+                        // En son satır muhtemelen yarım kalmıştır, onu tamponda tutmaya devam ediyoruz
+                        buffer = lines.pop(); 
 
                         for (let line of lines) {{
                             if (!line.trim()) continue;
@@ -325,18 +335,20 @@ def index():
                                         pText.innerHTML = "✅ <b>Tüm analizler başarıyla tamamlandı!</b>";
                                     }}
 
-                                    // DOM Ekleme Hatası Düzeltildi
                                     if (data.html && data.html.trim() !== "") {{
                                         box.insertAdjacentHTML('afterbegin', data.html);
                                     }}
                                 }}
-                            }} catch(err) {{}}
+                            }} catch(err) {{ 
+                                console.error("JSON Parse Hatası:", err, "Gelen satır:", line); 
+                            }}
                         }}
                     }}
                     setTimeout(() => {{ pContainer.style.display = 'none'; }}, 4000);
                     
                 }} catch(e) {{ 
                     pText.innerText = "Bağlantı hatası oluştu.";
+                    console.error(e);
                 }}
             }}
         </script>
@@ -344,7 +356,6 @@ def index():
     </html>
     """
 
-# Eksik olan Endpoint kısmı eklendi
 @app.post("/api/analyze")
 async def analyze_videos(req: AnalizRequest):
     async def generate():
