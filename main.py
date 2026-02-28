@@ -89,7 +89,7 @@ async def process_video(name, vid, vtitle, sem):
                 <a href='https://youtube.com/watch?v={vid}' target='_blank' class='source-link'>🔗 Orijinal Videoya Git</a>
             </div>
             """
-            res = await asyncio.to_thread(client.models.generate_content, model='gemini-1.5-flash', contents=prompt)
+            res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
             html = res.text.replace('```html', '').replace('```', '').strip()
             
             ANALIZ_HAFIZASI[vid] = html
@@ -331,3 +331,4 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
+
