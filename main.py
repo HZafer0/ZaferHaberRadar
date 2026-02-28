@@ -347,4 +347,45 @@ def index():
         </script>
     </body>
     </html>
+
     """
+    @app.post("/api/analyze")
+async def analyze_videos(req: AnalizRequest):
+    async def generate():
+        vids_to_process = []
+        
+        # 1. Taranacak videoları belirle
+        if req.q:
+            vids = get_recent_vids(req.q, 1)
+            for vid, title in vids:
+                vids_to_process.append({"name": "Özel Arama", "vid": vid, "title": title})
+        elif req.ids:
+            for uid in req.ids:
+                user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
+                if user:
+                    vids = get_recent_vids(user["url"], 1)
+                    for vid, title in vids:
+                        vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
+        
+        total = len(vids_to_process)
+        
+        # 2. Frontend'e başlangıç bilgisini gönder (start type)
+        start_data = {
+            "type": "start",
+            "total": total,
+            "vids": [{"name": v["name"], "title": v["title"]} for v in vids_to_process]
+        }
+        yield f"{json.dumps(start_data)}\n"
+        
+        if total == 0:
+            return
+
+        # 3. Videoları asenkron olarak analiz et ve sonuçları stream et (result type)
+        sem = asyncio.Semaphore(3) # Aynı anda en fazla 3 istek
+        tasks = [process_video(v["name"], v["vid"], v["title"], sem) for v in vids_to_process]
+        
+        for coro in asyncio.as_completed(tasks):
+            res = await coro
+            yield f"{json.dumps(res)}\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
