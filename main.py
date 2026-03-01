@@ -110,7 +110,7 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
 
     async with sem:
         try:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(4)
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
             Videoda konuşulan ANA KONU BAŞLIKLARINI tespit et. Her konunun altında, kişinin o konu hakkında söylediği fikirleri ve detayları düz metin olarak yaz."""
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
@@ -342,7 +342,7 @@ async def analyze_videos(req: AnalizRequest):
         aktif_video_sayisi = len([v for v in vids_to_process if v['vid'] is not None])
         yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(1)
         
         async def process_wrapper(v):
             if v["vid"] is None:
@@ -414,3 +414,4 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
+
