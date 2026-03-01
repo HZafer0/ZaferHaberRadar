@@ -22,7 +22,7 @@ UNLU_LISTESI = [
     {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
     {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv/videos"},
     {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
-    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"}, # DÜZELTİLDİ: Onlar TV
+    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
     {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın"},
     {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın"},
     {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
@@ -93,7 +93,8 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
 
     async with sem:
         try:
-            await asyncio.sleep(4)
+            # BEKLEME SÜRESİ KISALTILDI (Hız artışı için 4 saniyeden 0.5 saniyeye düşürüldü)
+            await asyncio.sleep(0.5)
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
             Sadece videoda konuşulan ana "Konu Başlıklarını" ve o konularda kişinin söylediği spesifik fikirleri düz metin ve madde madde yaz."""
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
@@ -107,7 +108,7 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
             return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": "Bağlantı Kurulamadı."}
 
 # ==========================================
-# HTML TASARIMI (HAKKINDA BÖLÜMÜ EKLENDİ)
+# HTML TASARIMI 
 # ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -200,7 +201,7 @@ FULL_HTML_TEMPLATE = """
             <button class="btn-s" onclick="search()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" style="margin-top:20px;" onclick="toggleAbout()">ℹ️ HAKKINDA</button>
+        <button class="btn-d" style="margin-top:20px;" onclick="toggleAbout()">HAKKINDA</button>
         <div id="aboutArea">
             <b>Zafer Radarı Nedir?</b><br><br>
             Bu sistem, seçtiğiniz gazetecilerin ve kanalların <b>sadece son 3 gün içindeki</b> YouTube yayınlarını yapay zeka ile izler.<br><br>
@@ -325,7 +326,8 @@ async def analyze_videos(req: AnalizRequest):
         aktif_video_sayisi = len([v for v in vids_to_process if v['vid'] is not None])
         yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
-        sem = asyncio.Semaphore(1)
+        # PARALEL İŞLEM KAPASİTESİ ARTIRILDI (1'den 5'e çıkarıldı, aynı anda daha çok video taranacak)
+        sem = asyncio.Semaphore(5)
         
         async def process_wrapper(v):
             if v["vid"] is None:
