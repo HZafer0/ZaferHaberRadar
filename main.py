@@ -3,6 +3,7 @@ import yt_dlp
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -10,16 +11,27 @@ from pydantic import BaseModel
 from google import genai
 from typing import List
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-client = genai.Client(api_key=GEMINI_API_KEY)
+# ==========================================
+# 🔐 ÇOKLU API KEY (YEDEKLEME) SİSTEMİ
+# ==========================================
+# Render.com'dan GEMINI_KEYS adıyla virgülle ayrılmış şifreleri alır.
+KEYS_STRING = os.environ.get("GEMINI_KEYS", "BURAYA_TEST_KEY_1, BURAYA_TEST_KEY_2")
+API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip()]
+
+# Eğer liste boşsa çökmemesi için güvenlik önlemi
+if not API_KEYS:
+    API_KEYS = ["DUMMY_KEY"]
+
+aktif_key_sirasi = 0
+
 app = FastAPI()
 
-# KANALLARIN LİNKLERİ GÜNCELLENDİ (Canlı yayın yapanlar 'streams' olarak değiştirildi)
-# KANALLARIN LİNKLERİ GÜNCELLENDİ (Belirli sekmeye sıkışmamaları için ana kanal linkleri yapıldı)
-# GÜNCEL VE ÇALIŞAN LİSTE (YouTube sekmeleri ve arama mantığı düzeltildi)
+# ==========================================
+# 📺 KANAL LİSTESİ
+# ==========================================
 UNLU_LISTESI = [
     {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
-    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/streams"}, # Genelde canlı yayın yapar
+    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/streams"},
     {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"}, 
     {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
     {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/streams"},
@@ -51,12 +63,43 @@ def hafiza_kaydet(hafiza_verisi):
     except: pass
 
 ANALIZ_HAFIZASI = hafiza_yukle()
-# ==========================================
 
 class AnalizRequest(BaseModel):
     ids: List[str] = []
     q: str = None
 
+# ==========================================
+# 🤖 YENİ: GÜVENLİ VE YEDEKLİ YAPAY ZEKA MOTORU
+# ==========================================
+async def guvenli_yapay_zeka_istegi(prompt_metni):
+    global aktif_key_sirasi
+    toplam_key = len(API_KEYS)
+    deneme_sayisi = 0
+    
+    while deneme_sayisi < toplam_key:
+        mevcut_key = API_KEYS[aktif_key_sirasi]
+        try:
+            # O an sırası gelen key ile client oluştur
+            temp_client = genai.Client(api_key=mevcut_key)
+            
+            # API'ye isteği gönder
+            res = await asyncio.to_thread(temp_client.models.generate_content, model='gemini-2.5-flash', contents=prompt_metni)
+            
+            # Google'ı şüphelendirmemek için diğer işleme geçmeden 3 saniye dinlen
+            await asyncio.sleep(3) 
+            return res.text.strip()
+            
+        except Exception as e:
+            print(f"Uyarı: Key patladı veya limit doldu. Sonraki Key'e geçiliyor... Detay: {e}")
+            aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
+            deneme_sayisi += 1
+            await asyncio.sleep(2) # Key değiştirirken ufak bir mola
+            
+    return "Sistem yoğunluğu veya kota limitleri nedeniyle yapay zeka bu işlemi tamamlayamadı."
+
+# ==========================================
+# 🕒 36 SAAT KONTROLÜ VE YOUTUBE ARAMASI
+# ==========================================
 def get_recent_vids(query, count=3):
     try:
         opts = {
@@ -65,16 +108,17 @@ def get_recent_vids(query, count=3):
             'quiet': True,
             'source_address': '0.0.0.0', 
             'ignoreerrors': True,
-            'socket_timeout': 60  # YENİ EKLENDİ: YouTube yavaşsa bile 60 saniye bekle, hemen pes edip hata verme!
+            'socket_timeout': 60
         }
         search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch8:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
             res = ydl.extract_info(search, download=False)
             vids = []
             
+            # --- YENİ: 36 SAAT SÜRE SINIRI ---
             now = datetime.now()
-            limit_ts = (now - timedelta(days=3)).timestamp()
-            limit_date_str = (now - timedelta(days=3)).strftime('%Y%m%d')
+            limit_ts = (now - timedelta(hours=36)).timestamp()
+            limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
             
             if 'entries' in res:
                 for entry in res['entries']:
@@ -86,18 +130,14 @@ def get_recent_vids(query, count=3):
                     ts = entry.get('timestamp')
                     upload_date = entry.get('upload_date')
                     
-                    # --- GÜNCEL TARİH MANTIĞI ---
                     if ts and ts >= limit_ts:
-                        # Hassas tarih varsa (Saatli)
                         dt_str = datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')
                         vids.append((vid_id, title, dt_str, ts))
                     elif upload_date and upload_date >= limit_date_str:
-                        # Saat yoksa sadece tarihi bas (01.03.2026 gibi)
                         y, m, d = upload_date[0:4], upload_date[4:6], upload_date[6:8]
                         dt_str = f"{d}.{m}.{y}"
                         vids.append((vid_id, title, dt_str, 0))
                     elif not ts and not upload_date:
-                        # Hiç veri gelmediyse bugünün tarihini at (Hata vermez)
                         dt_str = datetime.now().strftime('%d.%m.%Y')
                         vids.append((vid_id, title, dt_str, 0))
             
@@ -109,19 +149,18 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
         return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": ANALIZ_HAFIZASI[vid]}
 
     async with sem:
-        try:
-            await asyncio.sleep(4)
-            prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
-            Videoda konuşulan ANA KONU BAŞLIKLARINI tespit et. Her konunun altında, kişinin o konu hakkında söylediği fikirleri ve detayları düz metin olarak yaz."""
-            res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
-            text_content = res.text.strip()
-            
+        prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
+        Videoda konuşulan ANA KONU BAŞLIKLARINI tespit et. Her konunun altında, kişinin o konu hakkında söylediği fikirleri ve detayları düz metin olarak yaz."""
+        
+        # Yeni güvenli fonksiyonumuzu çağırıyoruz
+        text_content = await guvenli_yapay_zeka_istegi(prompt)
+        
+        # Hata mesajı dönmediyse hafızaya kaydet
+        if "Sistem yoğunluğu" not in text_content:
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
             
-            return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": text_content}
-        except Exception as e:
-            return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": "Bağlantı Kurulamadı."}
+        return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": text_content}
 
 # ==========================================
 # HTML TASARIMI 
@@ -220,7 +259,7 @@ FULL_HTML_TEMPLATE = """
         <button class="btn-d" style="margin-top:20px;" onclick="toggleAbout()">HAKKINDA</button>
         <div id="aboutArea">
             <b>Zafer Radarı Nedir?</b><br><br>
-            Bu sistem, seçtiğiniz gazetecilerin ve kanalların <b>sadece son 3 gün içindeki</b> YouTube yayınlarını yapay zeka ile izler.<br><br>
+            Bu sistem, seçtiğiniz gazetecilerin ve kanalların <b>sadece son 36 saat içindeki</b> YouTube yayınlarını yapay zeka ile izler.<br><br>
             Aynı olayı kimin nasıl yorumladığını, en son ne zaman bahsettiğini veya o konuyu kimlerin hiç konuşmadığını karşılaştırmalı bir bülten olarak tek ekranda sunar.
         </div>
     </div>
@@ -263,7 +302,7 @@ FULL_HTML_TEMPLATE = """
             pContainer.style.display = "block";
             pBar.style.width = "0%";
             pBar.style.background = "var(--p)";
-            pText.innerText = "Son 3 günün videoları aranıyor...";
+            pText.innerText = "Son 36 saatin videoları aranıyor...";
             
             try {
                 const response = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
@@ -346,7 +385,7 @@ async def analyze_videos(req: AnalizRequest):
         
         async def process_wrapper(v):
             if v["vid"] is None:
-                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 3 gün içinde YouTube'a bu konuyla ilgili video veya yayın yüklemedi."}
+                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 36 saat içinde YouTube'a bu konuyla ilgili video veya yayın yüklemedi."}
             return await process_video(v["name"], v["vid"], v["title"], v["dt"], v["ts"], sem)
             
         tasks = [process_wrapper(v) for v in vids_to_process]
@@ -367,9 +406,8 @@ async def analyze_videos(req: AnalizRequest):
         
         isim_listesi_str = ", ".join(secilen_isimler)
         
-        # PROMPT TAMAMEN YENİLENDİ: Her farklı konu ayrı bir başlık olacak ve herkes o başlıkta sorgulanacak!
         sentez_prompt = f"""
-        Aşağıda Türkiye'deki gazetecilerin/kanalların son 3 gün içindeki yayınlarından çıkarılmış notlar var.
+        Aşağıda Türkiye'deki gazetecilerin/kanalların son 36 saat içindeki yayınlarından çıkarılmış notlar var.
         GÖREVİN: Bu notları KİŞİLERE GÖRE DEĞİL, KONULARA (OLAYLARA) GÖRE BİRLEŞTİRMEK.
 
         Tüm Seçilen Kişiler Listesi: {isim_listesi_str}
@@ -378,7 +416,7 @@ async def analyze_videos(req: AnalizRequest):
         1. Notlarda geçen **TÜM FARKLI KONULARI** eksiksiz tespit et. Sadece BİR KİŞİ bile farklı bir konuya değinmiş olsa, o konuyu ASLA es geçme ve ona ÖZEL BİR BAŞLIK aç. Hiçbir konuyu atlama!
         2. Her bir konu (başlık) için "Kim Ne Dedi?" listesi oluştur. Bu listede YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HER BİR KİŞİ eksiksiz olarak bulunmalıdır.
         3. Eğer kişi o özel konu hakkında konuşmuşsa yanına yayınlanma tarihini yaz: <li><b>[Kişi Adı] (Tarih Saat):</b> [Yorumu/Söylediği]</li>
-        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, O SPESİFİK KONU hakkında yayınlarında hiçbir şey SÖYLEMEMİŞSE VEYA hiç videosu yoksa, o kişiyi de listeye ekle ve AYNEN ŞUNU YAZ: <li><b>[Kişi Adı]:</b> Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
+        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, O SPESİFİK KONU hakkında yayınlarında hiçbir şey SÖYLEMEMİŞSE VEYA hiç videosu yoksa, o kişiyi de listeye ekle ve AYNEN ŞUNU YAZ: <li><b>[Kişi Adı]:</b> Son 36 saat içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
         5. Gündem maddelerini en güncel olay üstte olacak şekilde sırala. Yorum yapanları en üste, "değerlendirmesi bulunmuyor" diyenleri o listenin altına koy.
 
         Lütfen SADECE şu HTML formatını kullanarak hazırla (Markdown kullanma, sadece saf HTML kodu ver):
@@ -403,8 +441,9 @@ async def analyze_videos(req: AnalizRequest):
         """
 
         try:
-            final_res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=sentez_prompt)
-            final_html = final_res.text.replace('```html', '').replace('```', '').strip()
+            # Sentezleme işlemi de artık güvenli rotasyon fonksiyonundan geçiyor
+            final_text = await guvenli_yapay_zeka_istegi(sentez_prompt)
+            final_html = final_text.replace('```html', '').replace('```', '').strip()
             yield f"{json.dumps({'type': 'result', 'html': final_html})}\n"
         except Exception as e:
             err_html = f"<div class='card' style='border-color:red;'><h3 class='vid-title' style='color:red;'>Hata Oluştu</h3><p>{str(e)}</p></div>"
@@ -414,4 +453,3 @@ async def analyze_videos(req: AnalizRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
-
