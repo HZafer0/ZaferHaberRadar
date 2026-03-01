@@ -5,26 +5,25 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
 from typing import List
+from contextlib import asynccontextmanager
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
 # 🔐 ÇOKLU API KEY (YEDEKLEME) SİSTEMİ
 # ==========================================
-# Render.com'dan GEMINI_KEYS adıyla virgülle ayrılmış şifreleri alır.
 KEYS_STRING = os.environ.get("GEMINI_KEYS", "BURAYA_TEST_KEY_1, BURAYA_TEST_KEY_2")
 API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip()]
 
-# Eğer liste boşsa çökmemesi için güvenlik önlemi
 if not API_KEYS:
     API_KEYS = ["DUMMY_KEY"]
 
 aktif_key_sirasi = 0
-
-app = FastAPI()
 
 # ==========================================
 # 📺 KANAL LİSTESİ
@@ -44,7 +43,7 @@ UNLU_LISTESI = [
 ]
 
 # ==========================================
-# 🧠 HAFIZA (CACHE) SİSTEMİ 
+# 🧠 HAFIZA VE TRANSKRİPT (DEŞİFRE) SİSTEMİ 
 # ==========================================
 HAFIZA_DOSYASI = "hafiza.json"
 
@@ -64,12 +63,23 @@ def hafiza_kaydet(hafiza_verisi):
 
 ANALIZ_HAFIZASI = hafiza_yukle()
 
-class AnalizRequest(BaseModel):
-    ids: List[str] = []
-    q: str = None
+def video_metnini_al(vid):
+    """Videonun gerçek konuşma metnini (altyazısını) çeker"""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+        # Türkçe varsa Türkçe al, yoksa otomatik çevrilmiş Türkçe al, o da yoksa İngilizce vb. ne varsa onu Türkçe'ye çevirip al
+        try:
+            transcript = transcript_list.find_transcript(['tr']).fetch()
+        except:
+            transcript = transcript_list.find_transcript(['en']).translate('tr').fetch()
+            
+        metin = " ".join([t['text'] for t in transcript])
+        return metin[:25000] # API limitini aşmamak için ilk 25.000 karakteri (yaklaşık 20-30 dk'lık konuşma) alır.
+    except Exception as e:
+        return None
 
 # ==========================================
-# 🤖 YENİ: GÜVENLİ VE YEDEKLİ YAPAY ZEKA MOTORU
+# 🤖 GÜVENLİ YAPAY ZEKA MOTORU
 # ==========================================
 async def guvenli_yapay_zeka_istegi(prompt_metni):
     global aktif_key_sirasi
@@ -79,21 +89,15 @@ async def guvenli_yapay_zeka_istegi(prompt_metni):
     while deneme_sayisi < toplam_key:
         mevcut_key = API_KEYS[aktif_key_sirasi]
         try:
-            # O an sırası gelen key ile client oluştur
             temp_client = genai.Client(api_key=mevcut_key)
-            
-            # API'ye isteği gönder
             res = await asyncio.to_thread(temp_client.models.generate_content, model='gemini-2.5-flash', contents=prompt_metni)
-            
-            # Google'ı şüphelendirmemek için diğer işleme geçmeden 3 saniye dinlen
-            await asyncio.sleep(3) 
+            await asyncio.sleep(2) 
             return res.text.strip()
-            
         except Exception as e:
-            print(f"Uyarı: Key patladı veya limit doldu. Sonraki Key'e geçiliyor... Detay: {e}")
+            print(f"Uyarı: Key hatası. Sonraki Key'e geçiliyor... Detay: {e}")
             aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
             deneme_sayisi += 1
-            await asyncio.sleep(2) # Key değiştirirken ufak bir mola
+            await asyncio.sleep(1)
             
     return "Sistem yoğunluğu veya kota limitleri nedeniyle yapay zeka bu işlemi tamamlayamadı."
 
@@ -104,18 +108,17 @@ def get_recent_vids(query, count=3):
     try:
         opts = {
             'extract_flat': True, 
-            'playlist_end': 8, 
+            'playlist_end': 5, 
             'quiet': True,
             'source_address': '0.0.0.0', 
             'ignoreerrors': True,
-            'socket_timeout': 60
+            'socket_timeout': 30 
         }
-        search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch8:{query}"
+        search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch5:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
             res = ydl.extract_info(search, download=False)
             vids = []
             
-            # --- YENİ: 36 SAAT SÜRE SINIRI ---
             now = datetime.now()
             limit_ts = (now - timedelta(hours=36)).timestamp()
             limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
@@ -140,31 +143,99 @@ def get_recent_vids(query, count=3):
                     elif not ts and not upload_date:
                         dt_str = datetime.now().strftime('%d.%m.%Y')
                         vids.append((vid_id, title, dt_str, 0))
-            
             return vids
     except: return []
 
+# ==========================================
+# 🕵️‍♂️ ARKA PLAN AJANI (SÜREKLİ TARAMA)
+# ==========================================
+async def arka_plan_radari():
+    while True:
+        try:
+            print("🔄 [RADAR] Arka plan taraması başlatılıyor...")
+            for user in UNLU_LISTESI:
+                vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
+                
+                for vid, title, dt, ts in vids:
+                    if vid and vid not in ANALIZ_HAFIZASI:
+                        print(f"👀 [YENİ VİDEO] Tespit edildi: {title}")
+                        
+                        konusma_metni = await asyncio.to_thread(video_metnini_al, vid)
+                        
+                        if konusma_metni:
+                            prompt = f"""Aşağıda bir videonun tam deşifre (konuşma) metni verilmiştir.
+                            GÖREVİN: Metni okuyup içindeki ANA KONU BAŞLIKLARINI tespit etmek ve kişinin o konu hakkında ne söylediğini özetlemek.
+                            KESİN KURAL: SADECE METİNDE GEÇEN BİLGİLERİ YAZ. Kendi yorumunu katma, videoda söylenmeyen hiçbir şeyi (halüsinasyon) uydurma!
+                            
+                            KONUŞMA METNİ:
+                            {konusma_metni}"""
+                            
+                            text_content = await guvenli_yapay_zeka_istegi(prompt)
+                            
+                            if "Sistem yoğunluğu" not in text_content:
+                                ANALIZ_HAFIZASI[vid] = text_content
+                                hafiza_kaydet(ANALIZ_HAFIZASI)
+                                print(f"✅ [HAFIZAYA ALINDI]: {title}")
+                        else:
+                            print(f"⚠️ [ATLANDI] Altyazı bulunamadı: {title}")
+                        
+                        await asyncio.sleep(4) 
+                await asyncio.sleep(2) 
+                
+            print("💤 [RADAR] Tarama bitti. 1 Saat uykuya geçiliyor...")
+            await asyncio.sleep(3600) 
+            
+        except Exception as e:
+            print(f"⚠️ [RADAR HATASI]: {e}")
+            await asyncio.sleep(60) 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(arka_plan_radari())
+    yield
+    task.cancel()
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+class AnalizRequest(BaseModel):
+    ids: List[str] = []
+    q: str = None
+
+# ==========================================
+# 🚀 KULLANICI İSTEĞİ VE SENTEZ
+# ==========================================
 async def process_video(name, vid, vtitle, dt, ts, sem):
     if vid in ANALIZ_HAFIZASI:
         return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": ANALIZ_HAFIZASI[vid]}
 
     async with sem:
-        prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
-        Videoda konuşulan ANA KONU BAŞLIKLARINI tespit et. Her konunun altında, kişinin o konu hakkında söylediği fikirleri ve detayları düz metin olarak yaz."""
+        konusma_metni = await asyncio.to_thread(video_metnini_al, vid)
+        if not konusma_metni:
+            return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": "[SİSTEM NOTU: Bu videonun altyazısı okunamadığı için analiz edilemedi.]"}
+
+        prompt = f"""Aşağıda bir videonun tam deşifre (konuşma) metni verilmiştir.
+        GÖREVİN: Metni okuyup içindeki ANA KONU BAŞLIKLARINI tespit etmek ve kişinin o konu hakkında ne söylediğini özetlemek.
+        KESİN KURAL: SADECE METİNDE GEÇEN BİLGİLERİ YAZ. Kendi yorumunu katma, videoda söylenmeyen hiçbir şeyi uydurma!
         
-        # Yeni güvenli fonksiyonumuzu çağırıyoruz
+        KONUŞMA METNİ:
+        {konusma_metni}"""
+        
         text_content = await guvenli_yapay_zeka_istegi(prompt)
         
-        # Hata mesajı dönmediyse hafızaya kaydet
         if "Sistem yoğunluğu" not in text_content:
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
             
         return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": text_content}
 
-# ==========================================
-# HTML TASARIMI 
-# ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -255,24 +326,17 @@ FULL_HTML_TEMPLATE = """
             <input type="text" id="src" placeholder="Örn: Son dakika ekonomi">
             <button class="btn-s" onclick="search()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
-
-        <button class="btn-d" style="margin-top:20px;" onclick="toggleAbout()">HAKKINDA</button>
-        <div id="aboutArea">
-            <b>Zafer Radarı Nedir?</b><br><br>
-            Bu sistem, seçtiğiniz gazetecilerin ve kanalların <b>sadece son 36 saat içindeki</b> YouTube yayınlarını yapay zeka ile izler.<br><br>
-            Aynı olayı kimin nasıl yorumladığını, en son ne zaman bahsettiğini veya o konuyu kimlerin hiç konuşmadığını karşılaştırmalı bir bülten olarak tek ekranda sunar.
-        </div>
     </div>
 
     <div id="main">
         <div id="progress-container">
-            <div id="p-text">Hedefler taranıyor...</div>
+            <div id="p-text">Hafıza bankası kontrol ediliyor...</div>
             <div class="progress-bg"><div class="progress-bar" id="p-bar"></div></div>
         </div>
         <div id="box">
             <div style="text-align:center; margin-top:15vh; opacity:0.4;">
                 <h2 style="font-size: 2rem;">Radar Beklemede</h2>
-                <p style="font-size: 1.1rem;">Menüden seçim yapıp Haber Bültenini Hazırla butonuna basın.</p>
+                <p style="font-size: 1.1rem;">Arka plan verileri güncel. Menüden seçim yapıp Haber Bültenini Hazırla butonuna basın.</p>
             </div>
         </div>
     </div>
@@ -285,7 +349,6 @@ FULL_HTML_TEMPLATE = """
         }
         function autoCloseMenu() { if (window.innerWidth <= 768) { document.getElementById('side').classList.remove('mobile-open'); } }
         function toggleSpecial() { const area = document.getElementById('specialSearchArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }
-        function toggleAbout() { const area = document.getElementById('aboutArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }
         function filterList() { const val = document.getElementById('listSearch').value.toLowerCase(); document.querySelectorAll('.item').forEach(el => { el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; }); }
         function setAll(v) { document.querySelectorAll('.ch').forEach(c => c.checked = v); }
         
@@ -302,7 +365,7 @@ FULL_HTML_TEMPLATE = """
             pContainer.style.display = "block";
             pBar.style.width = "0%";
             pBar.style.background = "var(--p)";
-            pText.innerText = "Son 36 saatin videoları aranıyor...";
+            pText.innerText = "Hafıza kontrol ediliyor...";
             
             try {
                 const response = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
@@ -323,15 +386,15 @@ FULL_HTML_TEMPLATE = """
                             const data = JSON.parse(line);
                             if (data.type === 'start') {
                                 total = data.total; 
-                                pText.innerHTML = `🎯 <b>${total} geçerli video/kayıt bulundu. Dinleniyor...</b>`; 
+                                pText.innerHTML = `🎯 <b>${total} geçerli veri bulundu. Deşifre ediliyor...</b>`; 
                             } 
                             else if (data.type === 'progress') {
                                 completed = data.completed;
                                 pBar.style.width = Math.round((completed / total) * 100) + '%';
-                                pText.innerHTML = `🎯 <b>${completed} / ${total} video not edildi.</b><br>⏳ Son dinlenen: <span style="color:var(--muted)">${data.current_title}</span>`;
+                                pText.innerHTML = `⚡ <b>Okunuyor/Hafızadan Çekiliyor:</b> <span style="color:var(--muted)">${data.current_title}</span>`;
                             }
                             else if (data.type === 'synthesizing') {
-                                pText.innerHTML = `🧠 <b>Notlar tamamlandı!</b><br>✨ Yapay Zeka şimdi her farklı konuyu ayrı ayrı başlıklandırıyor...`;
+                                pText.innerHTML = `🧠 <b>Konuşma Metinleri Toplandı!</b><br>✨ Yapay Zeka anlık olarak gerçek analizleri sentezliyor...`;
                                 pBar.style.background = "#1f6feb";
                             }
                             else if (data.type === 'result') {
@@ -359,19 +422,16 @@ def index():
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         vids_to_process = []
-        secilen_isimler = []
         
         if req.q:
-            vids = get_recent_vids(req.q, 3)
-            secilen_isimler.append("Özel Arama")
+            vids = await asyncio.to_thread(get_recent_vids, req.q, 3)
             for vid, title, dt, ts in vids:
                 vids_to_process.append({"name": "Özel Arama", "vid": vid, "title": title, "dt": dt, "ts": ts})
         else:
             for uid in req.ids:
                 user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
                 if user:
-                    secilen_isimler.append(user["ad"])
-                    vids = get_recent_vids(user["url"], 3)
+                    vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
                     if not vids:
                         vids_to_process.append({"name": user["ad"], "vid": None, "title": "VİDEO YOK", "dt": None, "ts": 0})
                     else:
@@ -385,7 +445,7 @@ async def analyze_videos(req: AnalizRequest):
         
         async def process_wrapper(v):
             if v["vid"] is None:
-                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 36 saat içinde YouTube'a bu konuyla ilgili video veya yayın yüklemedi."}
+                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "KAYIT YOK"}
             return await process_video(v["name"], v["vid"], v["title"], v["dt"], v["ts"], sem)
             
         tasks = [process_wrapper(v) for v in vids_to_process]
@@ -397,27 +457,21 @@ async def analyze_videos(req: AnalizRequest):
             res = await coro
             if res.get("dt"):
                 completed += 1
-                toplanmis_notlar.append(f"KAYNAK ({res['name']}) [Yayın Tarihi: {res['dt']}]: {res['content']}")
+                if "SİSTEM NOTU" not in res['content']:
+                    toplanmis_notlar.append(f"KAYNAK ({res['name']}) [Yayın Tarihi: {res['dt']}]: {res['content']}")
                 yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title']})}\n"
-            else:
-                toplanmis_notlar.append(f"KAYNAK ({res['name']}): {res['content']}")
                 
         yield f"{json.dumps({'type': 'synthesizing'})}\n"
         
-        isim_listesi_str = ", ".join(secilen_isimler)
-        
         sentez_prompt = f"""
-        Aşağıda Türkiye'deki gazetecilerin/kanalların son 36 saat içindeki yayınlarından çıkarılmış notlar var.
+        Aşağıda Türkiye'deki gazetecilerin/kanalların konuşma metinlerinden çıkarılmış özet notlar var.
         GÖREVİN: Bu notları KİŞİLERE GÖRE DEĞİL, KONULARA (OLAYLARA) GÖRE BİRLEŞTİRMEK.
 
-        Tüm Seçilen Kişiler Listesi: {isim_listesi_str}
-
         ÇOK ÖNEMLİ VE KESİN KURALLAR:
-        1. Notlarda geçen **TÜM FARKLI KONULARI** eksiksiz tespit et. Sadece BİR KİŞİ bile farklı bir konuya değinmiş olsa, o konuyu ASLA es geçme ve ona ÖZEL BİR BAŞLIK aç. Hiçbir konuyu atlama!
-        2. Her bir konu (başlık) için "Kim Ne Dedi?" listesi oluştur. Bu listede YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HER BİR KİŞİ eksiksiz olarak bulunmalıdır.
-        3. Eğer kişi o özel konu hakkında konuşmuşsa yanına yayınlanma tarihini yaz: <li><b>[Kişi Adı] (Tarih Saat):</b> [Yorumu/Söylediği]</li>
-        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, O SPESİFİK KONU hakkında yayınlarında hiçbir şey SÖYLEMEMİŞSE VEYA hiç videosu yoksa, o kişiyi de listeye ekle ve AYNEN ŞUNU YAZ: <li><b>[Kişi Adı]:</b> Son 36 saat içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
-        5. Gündem maddelerini en güncel olay üstte olacak şekilde sırala. Yorum yapanları en üste, "değerlendirmesi bulunmuyor" diyenleri o listenin altına koy.
+        1. SADECE hakkında konuşulan konuları başlık yap.
+        2. Her konu (başlık) için "Kim Ne Dedi?" listesi oluştur. Bu listede SADECE o konu hakkında konuşmuş olan isimlere yer ver.
+        3. Eğer bir kişi o konu hakkında yorum YAPMAMIŞSA, adını ASLA LİSTEYE YAZMA! (Örn: "Değerlendirmesi bulunmuyor" gibi bir madde KESİNLİKLE YASAKTIR). Sadece konuşanları yaz.
+        4. Kişilerin adının yanına yayının saatini ekle. Örn: <li><b>[Kişi Adı] (Tarih Saat):</b> [Yorumu/Söylediği]</li>
 
         Lütfen SADECE şu HTML formatını kullanarak hazırla (Markdown kullanma, sadece saf HTML kodu ver):
 
@@ -441,7 +495,6 @@ async def analyze_videos(req: AnalizRequest):
         """
 
         try:
-            # Sentezleme işlemi de artık güvenli rotasyon fonksiyonundan geçiyor
             final_text = await guvenli_yapay_zeka_istegi(sentez_prompt)
             final_html = final_text.replace('```html', '').replace('```', '').strip()
             yield f"{json.dumps({'type': 'result', 'html': final_html})}\n"
