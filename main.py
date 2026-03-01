@@ -22,7 +22,7 @@ UNLU_LISTESI = [
     {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
     {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv/videos"},
     {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
-    {"id": "onlat", "ad": "Onlat TV", "url": "https://www.youtube.com/@OnlatTV/videos"},
+    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"}, # DÜZELTİLDİ: Onlar TV
     {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın"},
     {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın"},
     {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
@@ -56,13 +56,12 @@ class AnalizRequest(BaseModel):
 
 def get_recent_vids(query, count=3):
     try:
-        opts = {'extract_flat': True, 'playlist_end': 8, 'quiet': True} # Biraz fazla çekip filtreliyoruz
+        opts = {'extract_flat': True, 'playlist_end': 8, 'quiet': True}
         search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch8:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
             res = ydl.extract_info(search, download=False)
             vids = []
             
-            # Son 3 gün hesaplaması
             now = datetime.now()
             limit_ts = (now - timedelta(days=3)).timestamp()
             limit_date_str = (now - timedelta(days=3)).strftime('%Y%m%d')
@@ -77,11 +76,9 @@ def get_recent_vids(query, count=3):
                     ts = entry.get('timestamp')
                     upload_date = entry.get('upload_date')
                     
-                    # Saat-tarih bilgisi varsa ve son 3 gün içindeyse
                     if ts and ts >= limit_ts:
                         dt_str = datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')
                         vids.append((vid_id, title, dt_str, ts))
-                    # Saat yok ama gün bilgisi varsa
                     elif upload_date and upload_date >= limit_date_str:
                         y, m, d = upload_date[0:4], upload_date[4:6], upload_date[6:8]
                         dt_str = f"{d}.{m}.{y} (Saat Belirsiz)"
@@ -110,7 +107,7 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
             return {"name": name, "vid": vid, "title": vtitle, "dt": dt, "ts": ts, "content": "Bağlantı Kurulamadı."}
 
 # ==========================================
-# HTML TASARIMI (BİREBİR AYNI - EKRAN BOZULMAZ)
+# HTML TASARIMI (HAKKINDA BÖLÜMÜ EKLENDİ)
 # ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -156,6 +153,7 @@ FULL_HTML_TEMPLATE = """
         .btn-p { background: linear-gradient(135deg, #ff4757, #ff6b81); }
         .btn-s { background: #238636; margin-top: 5px; }
         .btn-d { background: var(--bg); border: 1px solid var(--border); color: var(--t); font-size: 0.85rem; }
+        .btn-d:hover { background: var(--border); }
         #specialSearchArea { margin: 20px 0; padding: 15px; background: var(--c); border-radius: 12px; border: 1px solid var(--border); display: none; }
         .section-title { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--muted); margin: 20px 0 10px 0; display: block; }
         .item { padding: 12px 10px; border-bottom: 1px solid var(--border); font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-radius: 8px; transition: background 0.2s; user-select: none; }
@@ -171,6 +169,7 @@ FULL_HTML_TEMPLATE = """
         .progress-bg { background: var(--border); height: 8px; border-radius: 10px; overflow: hidden; margin-top: 15px; }
         .progress-bar { width: 0%; height: 100%; background: var(--p); transition: width 0.4s ease, background 0.4s; }
         #p-text { font-size: 0.95rem; font-weight: 600; color: var(--t); line-height: 1.4; }
+        #aboutArea { display:none; margin-top:15px; padding: 15px; font-size:0.9rem; color:var(--t); background:rgba(128,128,128,0.05); border-radius:8px; border:1px solid var(--border); line-height:1.6; }
     </style>
 </head>
 <body class="dark">
@@ -200,6 +199,13 @@ FULL_HTML_TEMPLATE = """
             <input type="text" id="src" placeholder="Örn: Son dakika ekonomi">
             <button class="btn-s" onclick="search()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
+
+        <button class="btn-d" style="margin-top:20px;" onclick="toggleAbout()">ℹ️ HAKKINDA</button>
+        <div id="aboutArea">
+            <b>Zafer Radarı Nedir?</b><br><br>
+            Bu sistem, seçtiğiniz gazetecilerin ve kanalların <b>sadece son 3 gün içindeki</b> YouTube yayınlarını yapay zeka ile izler.<br><br>
+            Aynı olayı kimin nasıl yorumladığını, en son ne zaman bahsettiğini veya o konuyu kimlerin hiç konuşmadığını karşılaştırmalı bir bülten olarak tek ekranda sunar.
+        </div>
     </div>
 
     <div id="main">
@@ -223,6 +229,7 @@ FULL_HTML_TEMPLATE = """
         }
         function autoCloseMenu() { if (window.innerWidth <= 768) { document.getElementById('side').classList.remove('mobile-open'); } }
         function toggleSpecial() { const area = document.getElementById('specialSearchArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }
+        function toggleAbout() { const area = document.getElementById('aboutArea'); area.style.display = area.style.display === 'block' ? 'none' : 'block'; }
         function filterList() { const val = document.getElementById('listSearch').value.toLowerCase(); document.querySelectorAll('.item').forEach(el => { el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; }); }
         function setAll(v) { document.querySelectorAll('.ch').forEach(c => c.checked = v); }
         
@@ -310,13 +317,11 @@ async def analyze_videos(req: AnalizRequest):
                     secilen_isimler.append(user["ad"])
                     vids = get_recent_vids(user["url"], 3)
                     if not vids:
-                        # Son 3 günde video atmayanlar
                         vids_to_process.append({"name": user["ad"], "vid": None, "title": "VİDEO YOK", "dt": None, "ts": 0})
                     else:
                         for vid, title, dt, ts in vids:
                             vids_to_process.append({"name": user["ad"], "vid": vid, "title": title, "dt": dt, "ts": ts})
         
-        # Sadece videosu olanlar progress bar'da sayılsın
         aktif_video_sayisi = len([v for v in vids_to_process if v['vid'] is not None])
         yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
@@ -324,7 +329,7 @@ async def analyze_videos(req: AnalizRequest):
         
         async def process_wrapper(v):
             if v["vid"] is None:
-                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "KAYIT BULUNAMADI: Son 3 gün içinde YouTube'a video yüklemedi."}
+                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 3 gün içinde YouTube'a bu konuyla ilgili video yüklemedi."}
             return await process_video(v["name"], v["vid"], v["title"], v["dt"], v["ts"], sem)
             
         tasks = [process_wrapper(v) for v in vids_to_process]
@@ -354,7 +359,7 @@ async def analyze_videos(req: AnalizRequest):
         1. Gündem maddelerini (konuları) en güncel (en son bahsedilen) olay en üstte olacak şekilde sırala.
         2. Her konunun altında "Kim Ne Dedi?" listesinde, YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HERKES eksiksiz yer almalıdır.
         3. Bir kişi o konu hakkında konuşmuşsa yanına yayınlanma tarihini parantez içinde "(Tarih Saat)" ekle ve EN GÜNCEL tarihli olanları listenin üstüne koy. Örn: <li><b>Fatih Altaylı (15.05.2024 14:30):</b> ...</li>
-        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, o spesifik konu hakkında videolarında hiçbir şey söylememişse VEYA "Son 3 gün içinde YouTube'a video yüklemedi" notu varsa, O KİŞİYİ DE LİSTEYE EKLE VE YANINA AYNEN ŞUNU YAZ: "Bu konu hakkında değerlendirmesi veya bilgisi bulunmuyor." (Bu kişileri listenin en altına koy).
+        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, o spesifik konu hakkında videolarında hiçbir şey söylememişse VEYA "Son 3 gün içinde YouTube'a video yüklemedi" notu varsa, O KİŞİYİ DE LİSTEYE EKLE VE YANINA AYNEN ŞUNU YAZ: "Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor." (Bu kişileri listenin en altına koy).
 
         Lütfen şu HTML formatını kullanarak hazırla (Sadece saf HTML kodu ver, markdown kullanma):
 
@@ -370,7 +375,7 @@ async def analyze_videos(req: AnalizRequest):
                 <p style='margin-top:0; color:var(--t); font-weight:bold; font-size:1.1rem;'>Kim Ne Dedi?</p>
                 <ul>
                     <li><b>[Kişi Adı] (Tarih/Saat):</b> [Ne dediği]</li>
-                    <li><b>[Sessiz Kalan Kişi Adı]:</b> Bu konu hakkında değerlendirmesi veya bilgisi bulunmuyor.</li>
+                    <li><b>[Sessiz Kalan Kişi Adı]:</b> Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
                 </ul>
             </div>
         </div>
