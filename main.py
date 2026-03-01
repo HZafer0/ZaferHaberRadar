@@ -16,18 +16,19 @@ app = FastAPI()
 
 # KANALLARIN LİNKLERİ GÜNCELLENDİ (Canlı yayın yapanlar 'streams' olarak değiştirildi)
 # KANALLARIN LİNKLERİ GÜNCELLENDİ (Belirli sekmeye sıkışmamaları için ana kanal linkleri yapıldı)
+# GÜNCEL VE ÇALIŞAN LİSTE (YouTube sekmeleri ve arama mantığı düzeltildi)
 UNLU_LISTESI = [
-    {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli"},
-    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir"}, 
-    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu"}, 
-    {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos"},
-    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu"},
-    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv"},
-    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv"},
-    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV"},
-    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"}, # Bunlar zaten arama mantığıyla çalışıyor, sorun yok
-    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"}, # Bunlar zaten arama mantığıyla çalışıyor, sorun yok
-    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan"}
+    {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
+    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/streams"}, # Genelde canlı yayın yapar
+    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"}, 
+    {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
+    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/streams"},
+    {"id": "t24", "ad": "T24 Haber", "url": "ytsearch5:T24 Haber son"},
+    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
+    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
+    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"}, 
+    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"}, 
+    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
 ]
 
 # ==========================================
@@ -58,7 +59,14 @@ class AnalizRequest(BaseModel):
 
 def get_recent_vids(query, count=3):
     try:
-        opts = {'extract_flat': True, 'playlist_end': 8, 'quiet': True}
+        opts = {
+            'extract_flat': True, 
+            'playlist_end': 8, 
+            'quiet': True,
+            'source_address': '0.0.0.0', 
+            'ignoreerrors': True,
+            'socket_timeout': 60  # YENİ EKLENDİ: YouTube yavaşsa bile 60 saniye bekle, hemen pes edip hata verme!
+        }
         search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch8:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
             res = ydl.extract_info(search, download=False)
@@ -78,14 +86,21 @@ def get_recent_vids(query, count=3):
                     ts = entry.get('timestamp')
                     upload_date = entry.get('upload_date')
                     
+                    # --- GÜNCEL TARİH MANTIĞI ---
                     if ts and ts >= limit_ts:
+                        # Hassas tarih varsa (Saatli)
                         dt_str = datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')
                         vids.append((vid_id, title, dt_str, ts))
                     elif upload_date and upload_date >= limit_date_str:
+                        # Saat yoksa sadece tarihi bas (01.03.2026 gibi)
                         y, m, d = upload_date[0:4], upload_date[4:6], upload_date[6:8]
-                        dt_str = f"{d}.{m}.{y} (Saat Belirsiz)"
+                        dt_str = f"{d}.{m}.{y}"
                         vids.append((vid_id, title, dt_str, 0))
-
+                    elif not ts and not upload_date:
+                        # Hiç veri gelmediyse bugünün tarihini at (Hata vermez)
+                        dt_str = datetime.now().strftime('%d.%m.%Y')
+                        vids.append((vid_id, title, dt_str, 0))
+            
             return vids
     except: return []
 
