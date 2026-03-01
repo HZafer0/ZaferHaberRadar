@@ -3,6 +3,7 @@ import yt_dlp
 import asyncio
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -10,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
 from typing import List
-from contextlib import asynccontextmanager
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
@@ -42,9 +42,9 @@ UNLU_LISTESI = [
 ]
 
 # ==========================================
-# 🧠 HAFIZA VE TRANSKRİPT SİSTEMİ 
+# 🧠 HAFIZA SİSTEMİ (RENDER UYUMLU)
 # ==========================================
-HAFIZA_DOSYASI = "hafiza.json"
+HAFIZA_DOSYASI = os.path.join(tempfile.gettempdir(), "hafiza.json")
 
 def hafiza_yukle():
     if os.path.exists(HAFIZA_DOSYASI):
@@ -76,16 +76,17 @@ def video_metnini_al(vid):
         return None
 
 # ==========================================
-# 🎧 SESİ İNDİRİP DİNLEME (ALTYAZI YOKSA DEVREYE GİRER)
+# 🎧 SESİ İNDİRİP DİNLEME (RENDER UYUMLU)
 # ==========================================
 def sesi_indir_ve_dinle(vid, key, prompt_metni):
-    dosya_yolu = f"temp_audio_{vid}.m4a"
+    dosya_yolu = os.path.join(tempfile.gettempdir(), f"temp_audio_{vid}.m4a")
     try:
         opts = {
-            'format': 'm4a/bestaudio/best',
+            'format': 'bestaudio/best',
             'outtmpl': dosya_yolu,
             'quiet': True,
-            'nocheckcertificate': True
+            'nocheckcertificate': True,
+            'noplaylist': True
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={vid}"])
@@ -98,14 +99,15 @@ def sesi_indir_ve_dinle(vid, key, prompt_metni):
             contents=[prompt_metni, audio_file]
         )
         
-        # Temizlik kısmı düzeltildi (Syntax hatası giderildi)
+        # Temizlik - Syntax Hatası Giderildi
         if os.path.exists(dosya_yolu): 
             os.remove(dosya_yolu)
-        try: 
-            client.files.delete(name=audio_file.name) 
-        except: 
+            
+        try:
+            client.files.delete(name=audio_file.name)
+        except Exception:
             pass
-        
+            
         return response.text.strip()
     except Exception as e:
         if os.path.exists(dosya_yolu): 
@@ -125,17 +127,18 @@ async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
         try:
             if ses_dinle and vid:
                 res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
+                await asyncio.sleep(4) # Rate limit için nefes alma payı
                 return res_text
             else:
                 temp_client = genai.Client(api_key=mevcut_key)
                 res = await asyncio.to_thread(temp_client.models.generate_content, model='gemini-2.5-flash', contents=prompt_metni)
-                await asyncio.sleep(2) 
+                await asyncio.sleep(4) # Rate limit için nefes alma payı
                 return res.text.strip()
         except Exception as e:
             print(f"Uyarı: İşlem/Key hatası. Sonraki Key'e geçiliyor... Detay: {e}")
             aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
             deneme_sayisi += 1
-            await asyncio.sleep(1)
+            await asyncio.sleep(5) # Hata alınırsa biraz daha uzun bekle
             
     return "Sistem yoğunluğu veya kota limitleri nedeniyle yapay zeka bu işlemi tamamlayamadı."
 
@@ -218,7 +221,7 @@ class SearchRequest(BaseModel):
     q: str
 
 # ==========================================
-# 🖥️ FULL HTML (BUTONLAR GERİ EKLENDİ)
+# 🖥️ FULL HTML ARAYÜZ
 # ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -291,8 +294,9 @@ FULL_HTML_TEMPLATE = """
             <button class="btn-s" style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" style="background:var(--bg); color:var(--t); border:1px solid var(--border);" onclick="alert('ZAFER RADARI v3.0\\nYapay Zeka Destekli Video Ses Analiz Sistemi.')">HAKKINDA</button>
-        </div>
+        <button class="btn-d" style="background:var(--bg); color:var(--t); border:1px solid var(--border);" onclick="alert('ZAFER RADARI v3.2\\nSorunsuz API Sürümü')">HAKKINDA</button>
+        
+    </div>
 
     <div id="main">
         <div id="progress-container">
@@ -308,13 +312,11 @@ FULL_HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Özel Arama Aç/Kapa
         function toggleSpecial() {
             const area = document.getElementById('specialSearchArea');
             area.style.display = area.style.display === 'block' ? 'none' : 'block';
         }
 
-        // Özel Arama İsteği Atma
         async function searchSpecial() {
             const q = document.getElementById('src').value;
             if(!q) return alert("Lütfen bir link veya kelime girin!");
@@ -410,12 +412,8 @@ def index():
     checks_html = "".join([f'<label class="item"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>' for u in UNLU_LISTESI])
     return FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
 
-# ==========================================
-# 🔍 ÖZEL ARAMA BACKEND APİ KISMI 
-# ==========================================
 @app.post("/api/search")
 async def special_search(req: SearchRequest):
-    # Kullanıcı link girmişse veya kelime girmişse aratıp en üstteki videoyu çeker
     vids = await asyncio.to_thread(get_recent_vids, req.q, 1)
     if not vids:
         return {"html": "<div class='card'><h3 style='color:red;'>Video bulunamadı veya işlenemedi! Linki kontrol et.</h3></div>"}
@@ -433,7 +431,6 @@ async def special_search(req: SearchRequest):
             prompt = f"{ortak_prompt}\n\nGÖREV: Ekteki ses dosyasını DİNLE ve detaylıca analiz et."
             text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
             
-        # Gemini'nin verdiği yanıtı Markdown formatından okunabilir HTML'e çevirelim
         formatted_content = text_content.replace('\n', '<br>').replace('**', '')
         
         html_cikti = f"""
@@ -525,4 +522,5 @@ async def analyze_videos(req: AnalizRequest):
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
