@@ -14,18 +14,20 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 client = genai.Client(api_key=GEMINI_API_KEY)
 app = FastAPI()
 
+# KANALLARIN LİNKLERİ GÜNCELLENDİ (Canlı yayın yapanlar 'streams' olarak değiştirildi)
+# KANALLARIN LİNKLERİ GÜNCELLENDİ (Belirli sekmeye sıkışmamaları için ana kanal linkleri yapıldı)
 UNLU_LISTESI = [
-    {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
-    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/videos"},
-    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"},
-    {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
-    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
-    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv/videos"},
-    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
-    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
-    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın"},
-    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın"},
-    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
+    {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli"},
+    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir"}, 
+    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu"}, 
+    {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos"},
+    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu"},
+    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24tv"},
+    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv"},
+    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV"},
+    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"}, # Bunlar zaten arama mantığıyla çalışıyor, sorun yok
+    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"}, # Bunlar zaten arama mantığıyla çalışıyor, sorun yok
+    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan"}
 ]
 
 # ==========================================
@@ -93,10 +95,9 @@ async def process_video(name, vid, vtitle, dt, ts, sem):
 
     async with sem:
         try:
-            # BEKLEME SÜRESİ KISALTILDI (Hız artışı için 4 saniyeden 0.5 saniyeye düşürüldü)
             await asyncio.sleep(0.5)
             prompt = f"""Şu videoyu analiz et: https://youtube.com/watch?v={vid}. 
-            Sadece videoda konuşulan ana "Konu Başlıklarını" ve o konularda kişinin söylediği spesifik fikirleri düz metin ve madde madde yaz."""
+            Videoda konuşulan ANA KONU BAŞLIKLARINI tespit et. Her konunun altında, kişinin o konu hakkında söylediği fikirleri ve detayları düz metin olarak yaz."""
             res = await asyncio.to_thread(client.models.generate_content, model='gemini-2.5-flash', contents=prompt)
             text_content = res.text.strip()
             
@@ -276,7 +277,7 @@ FULL_HTML_TEMPLATE = """
                                 pText.innerHTML = `🎯 <b>${completed} / ${total} video not edildi.</b><br>⏳ Son dinlenen: <span style="color:var(--muted)">${data.current_title}</span>`;
                             }
                             else if (data.type === 'synthesizing') {
-                                pText.innerHTML = `🧠 <b>Notlar tamamlandı!</b><br>✨ Yapay Zeka şimdi tarihleri karşılaştırıp "Günün Manşetlerini" yazıyor...`;
+                                pText.innerHTML = `🧠 <b>Notlar tamamlandı!</b><br>✨ Yapay Zeka şimdi her farklı konuyu ayrı ayrı başlıklandırıyor...`;
                                 pBar.style.background = "#1f6feb";
                             }
                             else if (data.type === 'result') {
@@ -326,12 +327,11 @@ async def analyze_videos(req: AnalizRequest):
         aktif_video_sayisi = len([v for v in vids_to_process if v['vid'] is not None])
         yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
-        # PARALEL İŞLEM KAPASİTESİ ARTIRILDI (1'den 5'e çıkarıldı, aynı anda daha çok video taranacak)
         sem = asyncio.Semaphore(5)
         
         async def process_wrapper(v):
             if v["vid"] is None:
-                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 3 gün içinde YouTube'a bu konuyla ilgili video yüklemedi."}
+                return {"name": v["name"], "title": "VİDEO YOK", "dt": None, "ts": 0, "content": "Son 3 gün içinde YouTube'a bu konuyla ilgili video veya yayın yüklemedi."}
             return await process_video(v["name"], v["vid"], v["title"], v["dt"], v["ts"], sem)
             
         tasks = [process_wrapper(v) for v in vids_to_process]
@@ -351,34 +351,35 @@ async def analyze_videos(req: AnalizRequest):
         yield f"{json.dumps({'type': 'synthesizing'})}\n"
         
         isim_listesi_str = ", ".join(secilen_isimler)
+        
+        # PROMPT TAMAMEN YENİLENDİ: Her farklı konu ayrı bir başlık olacak ve herkes o başlıkta sorgulanacak!
         sentez_prompt = f"""
-        Aşağıda Türkiye'deki gazetecilerin son 3 gün içindeki videolarından notlar var.
-        Senden istediğim bunları KİŞİLERE GÖRE DEĞİL, KONULARA (OLAYLARA) GÖRE BİRLEŞTİRMEN.
+        Aşağıda Türkiye'deki gazetecilerin/kanalların son 3 gün içindeki yayınlarından çıkarılmış notlar var.
+        GÖREVİN: Bu notları KİŞİLERE GÖRE DEĞİL, KONULARA (OLAYLARA) GÖRE BİRLEŞTİRMEK.
 
         Tüm Seçilen Kişiler Listesi: {isim_listesi_str}
 
-        ÇOK ÖNEMLİ KURALLAR:
-        1. Gündem maddelerini (konuları) en güncel (en son bahsedilen) olay en üstte olacak şekilde sırala.
-        2. Her konunun altında "Kim Ne Dedi?" listesinde, YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HERKES eksiksiz yer almalıdır.
-        3. Bir kişi o konu hakkında konuşmuşsa yanına yayınlanma tarihini parantez içinde "(Tarih Saat)" ekle ve EN GÜNCEL tarihli olanları listenin üstüne koy. Örn: <li><b>Fatih Altaylı (15.05.2024 14:30):</b> ...</li>
-        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, o spesifik konu hakkında videolarında hiçbir şey söylememişse VEYA "Son 3 gün içinde YouTube'a video yüklemedi" notu varsa, O KİŞİYİ DE LİSTEYE EKLE VE YANINA AYNEN ŞUNU YAZ: "Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor." (Bu kişileri listenin en altına koy).
+        ÇOK ÖNEMLİ VE KESİN KURALLAR:
+        1. Notlarda geçen **TÜM FARKLI KONULARI** eksiksiz tespit et. Sadece BİR KİŞİ bile farklı bir konuya değinmiş olsa, o konuyu ASLA es geçme ve ona ÖZEL BİR BAŞLIK aç. Hiçbir konuyu atlama!
+        2. Her bir konu (başlık) için "Kim Ne Dedi?" listesi oluştur. Bu listede YUKARIDAKİ TÜM SEÇİLEN KİŞİLER listesindeki HER BİR KİŞİ eksiksiz olarak bulunmalıdır.
+        3. Eğer kişi o özel konu hakkında konuşmuşsa yanına yayınlanma tarihini yaz: <li><b>[Kişi Adı] (Tarih Saat):</b> [Yorumu/Söylediği]</li>
+        4. Eğer 'Tüm Seçilen Kişiler' listesindeki bir isim, O SPESİFİK KONU hakkında yayınlarında hiçbir şey SÖYLEMEMİŞSE VEYA hiç videosu yoksa, o kişiyi de listeye ekle ve AYNEN ŞUNU YAZ: <li><b>[Kişi Adı]:</b> Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
+        5. Gündem maddelerini en güncel olay üstte olacak şekilde sırala. Yorum yapanları en üste, "değerlendirmesi bulunmuyor" diyenleri o listenin altına koy.
 
-        Lütfen şu HTML formatını kullanarak hazırla (Sadece saf HTML kodu ver, markdown kullanma):
+        Lütfen SADECE şu HTML formatını kullanarak hazırla (Markdown kullanma, sadece saf HTML kodu ver):
 
         <div class='card'>
             <div class='card-header'>
                 <span class='badge' style='background:#1f6feb;'>GÜNDEM MADDESİ</span>
             </div>
-            <h3 class='vid-title'>📌 [Ortak Konu / Olayın Adı]</h3>
+            <h3 class='vid-title'>📌 [Ortak veya Tekil Konu Adı]</h3>
             <div class='topic'>
                 <p style='margin-top:0; color:var(--t); font-weight:bold; font-size:1.1rem;'>Olay Nedir?</p>
-                <p style='color:var(--muted); font-size:0.95rem;'>[Olayın tarafsız özeti]</p>
+                <p style='color:var(--muted); font-size:0.95rem;'>[Olayın özeti]</p>
                 <hr style='border:none; border-top:1px solid var(--border); margin:15px 0;'>
                 <p style='margin-top:0; color:var(--t); font-weight:bold; font-size:1.1rem;'>Kim Ne Dedi?</p>
                 <ul>
-                    <li><b>[Kişi Adı] (Tarih/Saat):</b> [Ne dediği]</li>
-                    <li><b>[Sessiz Kalan Kişi Adı]:</b> Son 3 gün içinde bu konu hakkında değerlendirmesi veya videosu bulunmuyor.</li>
-                </ul>
+                    </ul>
             </div>
         </div>
 
