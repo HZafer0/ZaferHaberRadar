@@ -81,12 +81,14 @@ def video_metnini_al(vid):
 def sesi_indir_ve_dinle(vid, key, prompt_metni):
     dosya_yolu = os.path.join(tempfile.gettempdir(), f"temp_audio_{vid}.m4a")
     try:
+        # YOUTUBE ENGELİNİ AŞMAK İÇİN ANDROID İSTEMCİSİ EKLENDİ
         opts = {
             'format': 'bestaudio/best',
             'outtmpl': dosya_yolu,
             'quiet': True,
             'nocheckcertificate': True,
-            'noplaylist': True
+            'noplaylist': True,
+            'extractor_args': {'youtube': {'client': ['android']}}
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={vid}"])
@@ -99,7 +101,6 @@ def sesi_indir_ve_dinle(vid, key, prompt_metni):
             contents=[prompt_metni, audio_file]
         )
         
-        # Temizlik - Syntax Hatası Giderildi
         if os.path.exists(dosya_yolu): 
             os.remove(dosya_yolu)
             
@@ -127,30 +128,32 @@ async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
         try:
             if ses_dinle and vid:
                 res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
-                await asyncio.sleep(4) # Rate limit için nefes alma payı
+                await asyncio.sleep(4)
                 return res_text
             else:
                 temp_client = genai.Client(api_key=mevcut_key)
                 res = await asyncio.to_thread(temp_client.models.generate_content, model='gemini-2.5-flash', contents=prompt_metni)
-                await asyncio.sleep(4) # Rate limit için nefes alma payı
+                await asyncio.sleep(4)
                 return res.text.strip()
         except Exception as e:
             print(f"Uyarı: İşlem/Key hatası. Sonraki Key'e geçiliyor... Detay: {e}")
             aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
             deneme_sayisi += 1
-            await asyncio.sleep(5) # Hata alınırsa biraz daha uzun bekle
+            await asyncio.sleep(5)
             
     return "Sistem yoğunluğu veya kota limitleri nedeniyle yapay zeka bu işlemi tamamlayamadı."
 
 def get_recent_vids(query, count=3):
     try:
+        # YOUTUBE ENGELİNİ AŞMAK İÇİN ANDROID İSTEMCİSİ EKLENDİ
         opts = {
             'extract_flat': True, 
             'playlist_end': 5, 
             'quiet': True,
             'source_address': '0.0.0.0', 
             'ignoreerrors': True,
-            'socket_timeout': 30 
+            'socket_timeout': 30,
+            'extractor_args': {'youtube': {'client': ['android']}}
         }
         search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch5:{query}"
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -294,7 +297,7 @@ FULL_HTML_TEMPLATE = """
             <button class="btn-s" style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" style="background:var(--bg); color:var(--t); border:1px solid var(--border);" onclick="alert('ZAFER RADARI v3.2\\nSorunsuz API Sürümü')">HAKKINDA</button>
+        <button class="btn-d" style="background:var(--bg); color:var(--t); border:1px solid var(--border);" onclick="alert('ZAFER RADARI v3.3\\nYouTube Engel Aşici Sürüm')">HAKKINDA</button>
         
     </div>
 
