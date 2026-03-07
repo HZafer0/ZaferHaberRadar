@@ -88,6 +88,11 @@ def onbellek_kaydet():
 
 ONBELLEK = onbellek_yukle()
 
+# Başlangıçta GUNCELLEME_DURUMU'nu önbellekten doldur
+for _uid in ONBELLEK:
+    _vs = ONBELLEK[_uid].get("vid_sayisi", 0)
+    GUNCELLEME_DURUMU[_uid] = "hazır" if _vs > 0 else "video_yok"
+
 # ==========================================
 # 📝 TRANSCRIPT ALMA (YENİ API UYUMLU)
 # ==========================================
@@ -443,7 +448,9 @@ async def process_video(name, vid, vtitle, sem, queue=None):
             return {"name": name, "vid": vid, "title": vtitle_tr, "content": text_content}
         
         except Exception as e:
-            hata_mesaji = f"[Bu video işlenemedi: {str(e)[:120]}]"
+            hata_str = str(e)
+            print(f"❌ Video işleme hatası ({vid}): {hata_str}")
+            hata_mesaji = f"[HATA - video işlenemedi: {hata_str[:200]}]"
             return {"name": name, "vid": vid, "title": vtitle_tr, "content": hata_mesaji, "hata": True}
 
 # ==========================================
@@ -692,13 +699,14 @@ FULL_HTML_TEMPLATE = """
                 const data = await res.json();
                 const toplam = {TOPLAM_KANAL};
                 const durum = document.getElementById('radar-durum');
-                const hazirSayisi = (data.onbellekte || []).filter(uid => (data.vid_sayilari || {})[uid] > 0).length;
+                const hazirSayisi = Object.entries(data.durumlar || {}).filter(([uid, d]) => d === 'hazır').length;
+                const videoYokSayisi = Object.entries(data.durumlar || {}).filter(([uid, d]) => d === 'video_yok').length;
 
                 if (data.calisiyor) {
                     durum.innerHTML = `🔄 Arka plan taraması çalışıyor...`;
                     durum.style.color = '#fbbf24';
-                } else if (hazirSayisi > 0) {
-                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${hazirSayisi}/${toplam}</b> kanal analiz edildi`;
+                } else if (hazirSayisi > 0 || videoYokSayisi > 0) {
+                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${hazirSayisi}</b> kanal analiz edildi · <span style="color:#555">${videoYokSayisi} yeni video yok</span>`;
                     durum.style.color = 'var(--muted)';
                 } else {
                     durum.innerHTML = `⏳ İlk tarama bekleniyor...`;
@@ -712,20 +720,18 @@ FULL_HTML_TEMPLATE = """
                     const vidSayisi = (data.vid_sayilari || {})[uid] || 0;
                     const durumu = (data.durumlar || {})[uid];
 
-                    if (data.onbellekte && data.onbellekte.includes(uid)) {
-                        if (vidSayisi > 0) {
-                            // Video var, analiz edildi → yeşil nokta + sayı
-                            el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;"></span><span style="font-size:0.65rem;color:#3fb950;">${vidSayisi}</span></span>`;
-                        } else {
-                            // Önbellekte ama video yok (eski veri) → gri tire
-                            el.innerHTML = '<span style="color:#444;font-size:0.65rem;margin-left:4px;">—</span>';
-                        }
+                    if (durumu === 'hazır' && vidSayisi > 0) {
+                        el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:3px;margin-left:5px;"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;"></span><span style="font-size:0.65rem;color:#3fb950;">${vidSayisi}</span></span>`;
+                    } else if (durumu === 'video_yok') {
+                        el.innerHTML = '<span style="color:#555;font-size:0.65rem;margin-left:5px;font-style:italic;">yeni yok</span>';
                     } else if (durumu === 'işleniyor') {
                         el.innerHTML = '<span class="analiz-badge">⏳</span>';
-                    } else if (durumu === 'video_yok') {
-                        el.innerHTML = '<span style="color:#444;font-size:0.65rem;margin-left:4px;">—</span>';
                     } else if (durumu === 'hata') {
-                        el.innerHTML = '<span style="color:#fc8181;font-size:0.65rem;margin-left:4px;">!</span>';
+                        el.innerHTML = '<span style="color:#fc8181;font-size:0.65rem;margin-left:5px;">hata</span>';
+                    } else if (durumu === 'bekleniyor') {
+                        el.innerHTML = '<span style="color:#444;font-size:0.65rem;margin-left:5px;">...</span>';
+                    } else {
+                        el.innerHTML = '';
                     }
                 });
             } catch(e) {}
@@ -957,12 +963,21 @@ Kendi yorumunu katma. Türkçe yaz."""
 
 @app.get("/api/durum")
 async def guncelleme_durumu():
-    cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+    # Tüm kanallar için durum üret
+    tam_durum = {}
+    for u in UNLU_LISTESI:
+        uid = u["id"]
+        if uid in GUNCELLEME_DURUMU:
+            tam_durum[uid] = GUNCELLEME_DURUMU[uid]
+        elif uid in ONBELLEK:
+            tam_durum[uid] = "hazır" if ONBELLEK[uid].get("vid_sayisi", 0) > 0 else "video_yok"
+        else:
+            tam_durum[uid] = "bekleniyor"
+
     return {
         "calisiyor": ARKAPLAN_CALISIYOR,
-        "durumlar": GUNCELLEME_DURUMU,
+        "durumlar": tam_durum,
         "onbellekte": list(ONBELLEK.keys()),
-        "cookie_var": os.path.exists(cookie_dosyasi),
         "vid_sayilari": {uid: ONBELLEK[uid].get("vid_sayisi", 0) for uid in ONBELLEK},
         "son_guncelleme": {uid: ONBELLEK[uid].get("zaman", "?") for uid in ONBELLEK}
     }
