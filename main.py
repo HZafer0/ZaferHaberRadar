@@ -65,92 +65,141 @@ def hafiza_kaydet(hafiza_verisi):
 ANALIZ_HAFIZASI = hafiza_yukle()
 
 # ==========================================
-# 📝 TRANSCRIPT ALMA (GELİŞTİRİLMİŞ)
+# 🗄️ ÖNBELLEK SİSTEMİ (Hazır bültenler)
+# ==========================================
+ONBELLEK_DOSYASI = os.path.join(tempfile.gettempdir(), "onbellek.json")
+ONBELLEK = {}          # { "altayli,ozdemir": {"html": "...", "zaman": timestamp} }
+GUNCELLEME_DURUMU = {} # { "altayli": "hazır" / "işleniyor" / "hata" }
+ARKAPLAN_CALISIYOR = False
+
+def onbellek_yukle():
+    if os.path.exists(ONBELLEK_DOSYASI):
+        try:
+            with open(ONBELLEK_DOSYASI, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+def onbellek_kaydet():
+    try:
+        with open(ONBELLEK_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(ONBELLEK, f, ensure_ascii=False, indent=2)
+    except: pass
+
+ONBELLEK = onbellek_yukle()
+
+# ==========================================
+# 📝 TRANSCRIPT ALMA (YENİ API UYUMLU)
 # ==========================================
 def video_metnini_al(vid):
     """
-    Önce Türkçe transcript dener, sonra İngilizce, 
-    sonra otomatik oluşturulmuş altyazıları dener.
+    youtube-transcript-api yeni versiyonu için güncellendi.
+    fetch() artık doğrudan çağrılıyor, list_transcripts() yerine.
     """
+    # Yöntem 1: Yeni API - direkt fetch (v0.6+)
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-        
-        # 1. Önce manuel Türkçe
-        try:
-            transcript = transcript_list.find_manually_created_transcript(['tr']).fetch()
-            metin = " ".join([t['text'] for t in transcript])
+        from youtube_transcript_api import YouTubeTranscriptApi
+        # Yeni API: fetch() metodu
+        transcript = YouTubeTranscriptApi.fetch(vid, languages=['tr', 'en'])
+        metin = " ".join([t.get('text', '') if isinstance(t, dict) else t.text for t in transcript])
+        if metin.strip():
             return metin[:35000]
-        except:
-            pass
-        
-        # 2. Otomatik Türkçe
-        try:
-            transcript = transcript_list.find_generated_transcript(['tr']).fetch()
-            metin = " ".join([t['text'] for t in transcript])
-            return metin[:35000]
-        except:
-            pass
-        
-        # 3. Herhangi bir dil (ilk bulunan)
-        try:
-            for t in transcript_list:
-                fetched = t.fetch()
-                metin = " ".join([item['text'] for item in fetched])
-                return metin[:35000]
-        except:
-            pass
-            
-    except Exception as e:
-        print(f"Transcript hatası ({vid}): {e}")
+    except Exception as e1:
+        print(f"Transcript yöntem-1 hatası ({vid}): {e1}")
     
+    # Yöntem 2: Eski API - list_transcripts
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+        for lang in ['tr', 'en']:
+            try:
+                t = transcript_list.find_transcript([lang]).fetch()
+                metin = " ".join([x['text'] if isinstance(x, dict) else x.text for x in t])
+                if metin.strip():
+                    return metin[:35000]
+            except:
+                continue
+        # Herhangi bir dil
+        for t in transcript_list:
+            try:
+                fetched = t.fetch()
+                metin = " ".join([x['text'] if isinstance(x, dict) else x.text for x in fetched])
+                if metin.strip():
+                    return metin[:35000]
+            except:
+                continue
+    except Exception as e2:
+        print(f"Transcript yöntem-2 hatası ({vid}): {e2}")
+
     return None
 
+# Aynı anda indirilen dosyaları takip et (dosya kilidi önleme)
+_indirme_kilitleri = {}
+_indirme_kilitleri_lock = asyncio.Lock()
+
 # ==========================================
-# 🎧 SES İNDİRME (SON ÇARE - GELİŞTİRİLMİŞ)
+# 🎧 SES İNDİRME (DOSYA KİLİDİ + JS UYARI FİXİ)
 # ==========================================
 def sesi_indir_ve_dinle(vid, key, prompt_metni):
-    dosya_yolu = os.path.join(tempfile.gettempdir(), f"temp_audio_{vid}.m4a")
+    # Her video için benzersiz dosya adı (çakışma önleme)
+    import uuid
+    benzersiz_id = uuid.uuid4().hex[:8]
+    dosya_yolu = os.path.join(tempfile.gettempdir(), f"audio_{vid}_{benzersiz_id}.m4a")
+    
     try:
-        # Birden fazla client stratejisi dene
         strategies = [
             {'extractor_args': {'youtube': {'client': ['ios']}}},
-            {'extractor_args': {'youtube': {'client': ['android_embedded']}}},
-            {'extractor_args': {'youtube': {'client': ['web_embedded']}}},
+            {'extractor_args': {'youtube': {'client': ['android']}}},
+            {'extractor_args': {'youtube': {'client': ['web']}}},
         ]
         
         downloaded = False
         for strategy in strategies:
             try:
                 opts = {
-                    'format': 'bestaudio[filesize<25M]/bestaudio/best',
+                    'format': 'bestaudio[filesize<30M]/bestaudio/best',
                     'outtmpl': dosya_yolu,
                     'quiet': True,
+                    'no_warnings': True,       # JS runtime uyarılarını sustur
                     'nocheckcertificate': True,
                     'noplaylist': True,
+                    'noprogress': False,
                     **strategy
                 }
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ydl.download([f"https://www.youtube.com/watch?v={vid}"])
-                if os.path.exists(dosya_yolu):
+                # İndirilen dosyayı bul (.m4a veya .webm olabilir)
+                import glob
+                bulunan = glob.glob(dosya_yolu.replace('.m4a', '.*'))
+                if bulunan:
+                    dosya_yolu = bulunan[0]
+                    downloaded = True
+                    break
+                elif os.path.exists(dosya_yolu):
                     downloaded = True
                     break
             except Exception as strat_e:
                 print(f"Strateji başarısız: {strat_e}")
+                # Yarım kalan dosyayı temizle
+                for f in glob.glob(dosya_yolu.replace('.m4a', '.*')):
+                    try: os.remove(f)
+                    except: pass
                 continue
         
         if not downloaded:
-            raise Exception("Tüm indirme stratejileri başarısız oldu.")
+            raise Exception("Tüm ses indirme stratejileri başarısız oldu.")
 
         client = genai.Client(api_key=key)
         audio_file = client.files.upload(file=dosya_yolu)
         
         response = client.models.generate_content(
-            model='gemini-2.5-flash',  
+            model='gemini-2.5-flash',
             contents=[prompt_metni, audio_file]
         )
         
-        if os.path.exists(dosya_yolu):
-            os.remove(dosya_yolu)
+        try:
+            if os.path.exists(dosya_yolu): os.remove(dosya_yolu)
+        except: pass
         try:
             client.files.delete(name=audio_file.name)
         except:
@@ -158,9 +207,19 @@ def sesi_indir_ve_dinle(vid, key, prompt_metni):
             
         return response.text.strip()
     except Exception as e:
-        if os.path.exists(dosya_yolu):
-            os.remove(dosya_yolu)
+        try:
+            if os.path.exists(dosya_yolu): os.remove(dosya_yolu)
+        except: pass
         raise e
+
+# Global API semaphore — aynı anda max 1 Gemini isteği (429'u önler)
+_api_sem = None
+
+def get_api_sem():
+    global _api_sem
+    if _api_sem is None:
+        _api_sem = asyncio.Semaphore(1)
+    return _api_sem
 
 # ==========================================
 # 🤖 GÜVENLİ YAPAY ZEKA MOTORU
@@ -170,95 +229,110 @@ async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
     toplam_key = len(API_KEYS)
     deneme_sayisi = 0
     
-    while deneme_sayisi < toplam_key:
-        mevcut_key = API_KEYS[aktif_key_sirasi]
-        try:
-            if ses_dinle and vid:
-                res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
-                await asyncio.sleep(3)
-                return res_text
-            else:
-                temp_client = genai.Client(api_key=mevcut_key)
-                res = await asyncio.to_thread(
-                    temp_client.models.generate_content,
-                    model='gemini-2.5-flash',  
-                    contents=prompt_metni
-                )
-                await asyncio.sleep(2)
-                return res.text.strip()
-        except Exception as e:
-            err_str = str(e).lower()
-            print(f"Uyarı: Key {aktif_key_sirasi} hatası: {e}")
+    async with get_api_sem():  # Aynı anda sadece 1 API isteği
+        while deneme_sayisi < toplam_key:
+            mevcut_key = API_KEYS[aktif_key_sirasi]
+            try:
+                if ses_dinle and vid:
+                    res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
+                    await asyncio.sleep(4)
+                    return res_text
+                else:
+                    temp_client = genai.Client(api_key=mevcut_key)
+                    res = await asyncio.to_thread(
+                        temp_client.models.generate_content,
+                        model='gemini-2.5-flash',
+                        contents=prompt_metni
+                    )
+                    await asyncio.sleep(3)  # Rate limit önleme
+                    return res.text.strip()
+            except Exception as e:
+                err_str = str(e).lower()
+                print(f"Uyarı: Key {aktif_key_sirasi} hatası: {e}")
+                
+                if "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str:
+                    # Bu key'in kotası bitti, sonrakine geç ve bekle
+                    aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
+                    await asyncio.sleep(10)  # Key değişince 10sn bekle
+                elif "winError 32" in err_str or "dosya" in err_str:
+                    await asyncio.sleep(2)
+                else:
+                    await asyncio.sleep(5)
+                
+                deneme_sayisi += 1
             
-            # Kota bittiyse sonraki key'e geç
-            if "quota" in err_str or "429" in err_str or "rate" in err_str:
-                aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
-                await asyncio.sleep(5)
-            else:
-                await asyncio.sleep(3)
-            
-            deneme_sayisi += 1
-            
-    return "⚠️ Sistem yoğunluğu nedeniyle bu video işlenemedi."
+    raise Exception("Tüm API key'leri denendi, kota limiti aşıldı. Lütfen birkaç dakika bekleyip tekrar deneyin.")
 
 # ==========================================
-# 📡 VİDEO LİSTESİ ÇEKME (GELİŞTİRİLMİŞ)
+# 📡 VİDEO LİSTESİ ÇEKME
 # ==========================================
 def get_recent_vids(query, count=3):
     now = datetime.now()
     limit_ts = (now - timedelta(hours=36)).timestamp()
     limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
-    
-    # Birden fazla strateji dene
+
     strategies = [
         {'extractor_args': {'youtube': {'client': ['ios']}}},
         {'extractor_args': {'youtube': {'client': ['android']}}},
         {'extractor_args': {'youtube': {'client': ['web']}}},
     ]
-    
+
     for strategy in strategies:
         try:
             opts = {
                 'extract_flat': True,
-                'playlist_end': 8,  # Daha fazla video tara
+                'playlist_end': 5,
                 'quiet': True,
+                'no_warnings': True,
                 'ignoreerrors': True,
                 'socket_timeout': 20,
                 **strategy
             }
             search = query if ("youtube.com" in query or "youtu.be" in query) else f"ytsearch5:{query}"
-            
+
             with yt_dlp.YoutubeDL(opts) as ydl:
                 res = ydl.extract_info(search, download=False)
-                vids = []
-                
-                if res and 'entries' in res:
-                    for entry in res['entries']:
-                        if not entry:
-                            continue
-                        if len(vids) >= count:
-                            break
-                        
-                        vid_id = entry.get('id')
-                        title = entry.get('title', 'Video')
-                        ts = entry.get('timestamp')
-                        upload_date = entry.get('upload_date')
-                        
-                        if ts and ts >= limit_ts:
-                            vids.append((vid_id, title))
-                        elif upload_date and upload_date >= limit_date_str:
-                            vids.append((vid_id, title))
-                        elif not ts and not upload_date:
-                            # Tarih bilgisi yoksa ekle (yayınlar için)
-                            vids.append((vid_id, title))
-                
-                if vids:
-                    return vids
-                    
+
+            if not res or 'entries' not in res:
+                continue
+
+            vids = []
+            for entry in res['entries']:
+                if not entry or len(vids) >= count:
+                    break
+
+                vid_id = entry.get('id')
+                title = entry.get('title', 'Video')
+                ts = entry.get('timestamp')
+                upload_date = entry.get('upload_date')
+
+                # Tarih varsa kontrol et
+                if ts:
+                    if ts < limit_ts:
+                        print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
+                        break  # Sıralı liste, ilk eski görününce dur
+                    print(f"✅ 36 saat içinde: {title[:50]}")
+                    vids.append((vid_id, title))
+                elif upload_date:
+                    if upload_date < limit_date_str:
+                        print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
+                        break
+                    print(f"✅ 36 saat içinde: {title[:50]}")
+                    vids.append((vid_id, title))
+                else:
+                    # Tarih yok ama kanal sıralı gelir → ilk videoları al
+                    # Gerçek tarih transcript/ses aşamasında zaten kontrol edilmiyor
+                    # ama en yeni video listenin başında olduğu için güvenli
+                    print(f"📋 Tarih bilinmiyor, listeye alındı: {title[:50]}")
+                    vids.append((vid_id, title))
+
+            if vids:
+                return vids
+
         except Exception as e:
-            print(f"Video çekme stratejisi başarısız: {e}")
+            print(f"Video çekme stratejisi başarısız ({strategy}): {e}")
             continue
-    
+
     return []
 
 # ==========================================
@@ -292,26 +366,52 @@ KURALLAR:
 # ==========================================
 # 🔄 VİDEO İŞLEME
 # ==========================================
-async def process_video(name, vid, vtitle, sem):
+async def baslik_turkce_cevir(baslik):
+    """Video başlığı İngilizce ise Türkçeye çevirir."""
+    import re
+    # Türkçe karakter veya kelime varsa zaten Türkçe
+    turkce_karakterler = re.search(r'[çğıöşüÇĞİÖŞÜ]', baslik)
+    turkce_kelimeler = any(k in baslik.lower() for k in ['ve', 'ile', 'bir', 'bu', 'ne', 'da', 'de', 'için', 'haber', 'son', 'nasıl'])
+    if turkce_karakterler or turkce_kelimeler:
+        return baslik
+    # İngilizce görünüyorsa çevir
+    try:
+        prompt = f'Bu YouTube video başlığını Türkçeye çevir, sadece çeviriyi yaz başka hiçbir şey ekleme: "{baslik}"'
+        cevirilen = await guvenli_yapay_zeka_istegi(prompt)
+        return cevirilen.strip('"').strip("'") if cevirilen else baslik
+    except:
+        return baslik
+
+async def process_video(name, vid, vtitle, sem, queue=None):
     if vid in ANALIZ_HAFIZASI:
         return {"name": name, "vid": vid, "title": vtitle, "content": ANALIZ_HAFIZASI[vid]}
 
     async with sem:
+        vtitle_tr = await baslik_turkce_cevir(vtitle)
         konusma_metni = await asyncio.to_thread(video_metnini_al, vid)
         
-        if konusma_metni:
-            prompt = ozetleme_promptu_olustur(name, "altyazı") + f"\n\nALTYAZI METNİ:\n{konusma_metni}"
-            text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
-        else:
-            print(f"⚠️ {vid} için altyazı bulunamadı, ses deneniyor...")
-            prompt = ozetleme_promptu_olustur(name, "ses") + "\n\nGÖREV: Ekteki ses dosyasını DİNLE ve analiz et."
-            text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
-        
-        if "⚠️ Sistem yoğunluğu" not in text_content:
+        try:
+            if konusma_metni:
+                # Altyazı bulundu — ara durum gönder
+                if queue:
+                    await queue.put({"type": "subprogress", "vid": vid, "title": vtitle_tr, "durum": f"📄 Altyazı okunuyor: {vtitle_tr[:50]}"})
+                prompt = ozetleme_promptu_olustur(name, "altyazı") + f"\n\nALTYAZI METNİ:\n{konusma_metni}"
+                text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
+            else:
+                print(f"⚠️ {vid} için altyazı bulunamadı, ses deneniyor...")
+                # Ses indirme başlıyor — kullanıcıya haber ver
+                if queue:
+                    await queue.put({"type": "subprogress", "vid": vid, "title": vtitle_tr, "durum": f"🎧 Ses indiriliyor: {vtitle_tr[:50]} (1-2 dk sürebilir)"})
+                prompt = ozetleme_promptu_olustur(name, "ses") + "\n\nGÖREV: Ekteki ses dosyasını DİNLE ve analiz et."
+                text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
+            
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
-            
-        return {"name": name, "vid": vid, "title": vtitle, "content": text_content}
+            return {"name": name, "vid": vid, "title": vtitle_tr, "content": text_content}
+        
+        except Exception as e:
+            hata_mesaji = f"[Bu video işlenemedi: {str(e)[:120]}]"
+            return {"name": name, "vid": vid, "title": vtitle_tr, "content": hata_mesaji, "hata": True}
 
 # ==========================================
 # 🧩 SENTEZLEYİCİ PROMPT (GELİŞTİRİLMİŞ)
@@ -375,6 +475,81 @@ class SearchRequest(BaseModel):
     q: str
 
 # ==========================================
+# 🔄 ARKA PLAN OTOMATİK GÜNCELLEME
+# ==========================================
+async def tek_kisi_isle(uid):
+    """Tek bir kişinin videolarını çekip önbelleğe al."""
+    user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
+    if not user:
+        return None
+
+    GUNCELLEME_DURUMU[uid] = "işleniyor"
+    try:
+        vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
+        if not vids:
+            GUNCELLEME_DURUMU[uid] = "video_yok"
+            return None
+
+        sem = asyncio.Semaphore(1)
+        notlar = []
+        for vid, title in vids:
+            res = await process_video(user["ad"], vid, title, sem)
+            notlar.append(f"### {res['name']} - Video: {res['title']}\n{res['content']}")
+
+        GUNCELLEME_DURUMU[uid] = "hazır"
+        return {"uid": uid, "notlar": notlar, "ad": user["ad"]}
+    except Exception as e:
+        print(f"Arka plan hata ({uid}): {e}")
+        GUNCELLEME_DURUMU[uid] = "hata"
+        return None
+
+async def arkaplan_guncelle():
+    """Tüm kanalları arka planda işleyip önbellekler. Her 2 saatte tekrar çalışır."""
+    global ARKAPLAN_CALISIYOR
+    while True:
+        ARKAPLAN_CALISIYOR = True
+        print("🔄 Arka plan güncellemesi başladı...")
+
+        try:
+            # Her kişiyi sırayla işle (API kotasını korumak için)
+            tum_notlar = {}
+            for u in UNLU_LISTESI:
+                sonuc = await tek_kisi_isle(u["id"])
+                if sonuc:
+                    tum_notlar[u["id"]] = sonuc
+                await asyncio.sleep(5)  # Kişiler arası bekleme
+
+            # Her kişi için tekli önbellek oluştur
+            for uid, veri in tum_notlar.items():
+                sentez = sentez_promptu_olustur(veri["ad"], veri["notlar"])
+                try:
+                    html = await guvenli_yapay_zeka_istegi(sentez)
+                    html = html.replace('```html', '').replace('```', '').strip()
+                    ONBELLEK[uid] = {
+                        "html": html,
+                        "notlar": veri["notlar"],
+                        "zaman": datetime.now().isoformat(),
+                        "ad": veri["ad"]
+                    }
+                    onbellek_kaydet()
+                    print(f"✅ Önbellek güncellendi: {veri['ad']}")
+                except Exception as e:
+                    print(f"Sentez hatası ({uid}): {e}")
+
+        except Exception as e:
+            print(f"Arka plan genel hata: {e}")
+
+        ARKAPLAN_CALISIYOR = False
+        print("✅ Arka plan güncellemesi tamamlandı. 2 saat sonra tekrar çalışacak.")
+        await asyncio.sleep(2 * 60 * 60)  # 2 saat bekle
+
+@app.on_event("startup")
+async def startup_event():
+    """Uygulama başlarken arka plan güncellemeyi başlat."""
+    asyncio.create_task(arkaplan_guncelle())
+    print("🚀 Arka plan güncelleme görevi başlatıldı.")
+
+# ==========================================
 # 🖥️ HTML ARAYÜZ
 # ==========================================
 FULL_HTML_TEMPLATE = """
@@ -430,17 +605,23 @@ FULL_HTML_TEMPLATE = """
     <button class="top-btn theme-toggle" onclick="document.body.classList.toggle('dark')">🌓</button>
 
     <div id="side">
-        <h2 style="color:var(--p); font-size: 1.8rem; margin-bottom: 15px;">ZAFER RADARI</h2>
-        <div id="u-list" style="margin: 15px 0; max-height: 40vh; overflow-y: auto;">
+        <h2 style="color:var(--p); font-size: 1.8rem; margin-bottom: 5px;">ZAFER RADARI</h2>
+        <div id="radar-durum" style="font-size:0.78rem; color:var(--muted); margin-bottom:12px;">⏳ Durum yükleniyor...</div>
+
+        <div id="u-list" style="margin: 15px 0; max-height: 38vh; overflow-y: auto;">
             {CHECKS_HTML}
         </div>
         
-        <div style="display:flex; gap:10px;">
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
             <button class="btn-d" onclick="document.querySelectorAll('.ch').forEach(c => c.checked = true)">Tümünü Seç</button>
             <button class="btn-d" onclick="document.querySelectorAll('.ch').forEach(c => c.checked = false)">Temizle</button>
         </div>
-        
-        <button class="btn-p" style="margin-top:20px; margin-bottom:15px; padding: 15px;" onclick="run()">HABER BÜLTENİNİ HAZIRLA</button>
+
+        <button class="btn-p" style="margin-bottom:8px; padding: 15px;" onclick="anindaGoster()">⚡ ANİNDA GÖSTER</button>
+        <div style="font-size:0.75rem; color:var(--muted); text-align:center; margin-bottom:12px;">Önbellekteki hazır verileri gösterir</div>
+
+        <button class="btn-d" style="margin-bottom:8px; background:#2d333b; color:#cdd9e5;" onclick="run()">🔄 YENİDEN ANALİZ ET</button>
+        <div style="font-size:0.75rem; color:var(--muted); text-align:center; margin-bottom:15px;">Yeni video varsa çekip özetler</div>
         
         <button class="btn-d" style="background:#1f6feb; color:white; border:none; margin-bottom: 15px;" onclick="toggleSpecial()">🔍 ÖZEL VİDEO ANALİZİ</button>
         
@@ -449,7 +630,7 @@ FULL_HTML_TEMPLATE = """
             <button style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" onclick="alert('ZAFER RADARI v4.0\\nGeliştirilmiş YouTube & AI Sürümü')">HAKKINDA</button>
+        <button class="btn-d" onclick="alert('ZAFER RADARI v4.1\\nÖnbellekli Sürüm')">HAKKINDA</button>
     </div>
 
     <div id="main">
@@ -458,14 +639,87 @@ FULL_HTML_TEMPLATE = """
             <div class="progress-bg"><div class="progress-bar" id="p-bar"></div></div>
         </div>
         <div id="box">
-            <div style="text-align:center; margin-top:15vh; opacity:0.4;">
-                <h2 style="font-size: 2rem;">Radar Hazır</h2>
-                <p>Kişileri seçip bülteni hazırlayın veya Özel Analiz yapın.</p>
+            <div style="text-align:center; margin-top:12vh; opacity:0.5;">
+                <div style="font-size:3rem; margin-bottom:15px;">⚡</div>
+                <h2 style="font-size: 1.8rem; margin-bottom:10px;">Radar Hazır</h2>
+                <p style="max-width:400px; margin:0 auto; line-height:1.6;">Arka planda tüm kanallar sürekli izleniyor.<br>
+                <b style="color:var(--p);">ANİNDA GÖSTER</b> butonuna bas, hazır bülteni gör.</p>
             </div>
         </div>
     </div>
 
     <script>
+        // Sayfa açılınca durum kontrol et
+        async function durumGuncelle() {
+            try {
+                const res = await fetch('/api/durum');
+                const data = await res.json();
+                const onbellekSayisi = Object.keys(data.onbellekte || {}).length;
+                const toplam = {TOPLAM_KANAL};
+                const durum = document.getElementById('radar-durum');
+                if (data.calisiyor) {
+                    durum.innerHTML = `🔄 Arka plan taraması çalışıyor...`;
+                } else if (onbellekSayisi > 0) {
+                    durum.innerHTML = `✅ <b>${onbellekSayisi}/${toplam}</b> kanal hazır — anında göster!`;
+                    durum.style.color = '#3fb950';
+                } else {
+                    durum.innerHTML = `⏳ Henüz önbellek yok, ilk tarama bekleniyor...`;
+                }
+                // Checkbox'lara hazır badge ekle
+                document.querySelectorAll('.ch').forEach(cb => {
+                    const label = cb.closest('label');
+                    if (!label) return;
+                    const badge = label.querySelector('.hazir-badge');
+                    if (data.onbellekte && data.onbellekte.includes(cb.value)) {
+                        if (!badge) {
+                            const b = document.createElement('span');
+                            b.className = 'hazir-badge';
+                            b.textContent = '✅';
+                            b.style.cssText = 'font-size:0.75rem; margin-left:5px;';
+                            label.querySelector('.item-text').appendChild(b);
+                        }
+                    }
+                });
+            } catch(e) {}
+        }
+        durumGuncelle();
+        setInterval(durumGuncelle, 30000); // Her 30 sn güncelle
+
+        async function anindaGoster() {
+            const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value);
+            if (ids.length === 0) return alert("Kişi seçin!");
+            if (window.innerWidth <= 768) document.getElementById('side').classList.remove('mobile-open');
+
+            const box = document.getElementById('box');
+            const pContainer = document.getElementById('progress-container');
+            const pBar = document.getElementById('p-bar');
+            const pText = document.getElementById('p-text');
+
+            box.innerHTML = "";
+            pContainer.style.display = "block";
+            pBar.style.width = "30%";
+            pText.innerHTML = `⚡ <b>Önbellekten yükleniyor...</b>`;
+
+            try {
+                const response = await fetch('/api/aninda', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ids})
+                });
+                const data = await response.json();
+                pBar.style.width = "100%";
+                if (data.bos) {
+                    pText.innerHTML = `⚠️ Seçilen kişiler için önbellekte veri yok. <b>YENİDEN ANALİZ ET</b> butonuna bas.`;
+                } else {
+                    pText.innerHTML = `✅ <b>Hazır!</b>`;
+                    box.innerHTML = data.html;
+                    setTimeout(() => { pContainer.style.display = 'none'; }, 2000);
+                }
+            } catch(e) {
+                pText.innerText = "Hata: " + e.message;
+            }
+        }
+
         function toggleSpecial() {
             const area = document.getElementById('specialSearchArea');
             area.style.display = area.style.display === 'block' ? 'none' : 'block';
@@ -501,7 +755,37 @@ FULL_HTML_TEMPLATE = """
             }
         }
 
-        async function run() { 
+        // Önbellek durumunu göster
+        const onbellekKeys = {ONBELLEK_KEYS};
+        function onbellekGoster() {
+            onbellekKeys.forEach(uid => {
+                const el = document.getElementById('durum-' + uid);
+                if (el) el.innerHTML = '✅';
+            });
+        }
+        onbellekGoster();
+
+        // Her 3 dakikada önbellek durumunu güncelle
+        async function durumGuncelle() {
+            try {
+                const r = await fetch('/api/durum');
+                const d = await r.json();
+                d.onbellekte.forEach(uid => {
+                    const el = document.getElementById('durum-' + uid);
+                    if (el) el.innerHTML = '✅';
+                });
+                Object.entries(d.durumlar).forEach(([uid, durum]) => {
+                    const el = document.getElementById('durum-' + uid);
+                    if (!el) return;
+                    if (durum === 'işleniyor') el.innerHTML = '⏳';
+                    else if (durum === 'hata') el.innerHTML = '❌';
+                    else if (durum === 'video_yok') el.innerHTML = '📭';
+                });
+            } catch(e) {}
+        }
+        setInterval(durumGuncelle, 3 * 60 * 1000);
+
+        async function run() {
             const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value); 
             if(ids.length === 0) return alert("Kişi seçin!"); 
             if (window.innerWidth <= 768) document.getElementById('side').classList.remove('mobile-open');
@@ -537,16 +821,24 @@ FULL_HTML_TEMPLATE = """
                         try {
                             const data = JSON.parse(line);
                             if (data.type === 'start') {
-                                total = data.total; 
-                                pText.innerHTML = `🎯 <b>${total} video bulundu, işleniyor...</b>`;
+                                total = data.total;
+                                if (data.onbellek > 0 && total === 0) {
+                                    pText.innerHTML = `⚡ <b>Tüm veriler önbellekte! Sentezleniyor...</b>`;
+                                } else if (data.onbellek > 0) {
+                                    pText.innerHTML = `⚡ <b>${data.onbellek} kişi önbellekten, ${total} video işlenecek...</b>`;
+                                } else {
+                                    pText.innerHTML = `🎯 <b>${total} video bulundu, işleniyor...</b>`;
+                                }
                             } 
                             else if (data.type === 'progress') {
                                 completed = data.completed;
-                                pBar.style.width = Math.round((completed / total) * 100) + '%';
-                                pText.innerHTML = `⚡ <b>${completed}/${total}</b> — <span style="color:var(--muted)">${data.current_title}</span>`;
+                                const yuzde = data.yuzde !== undefined ? data.yuzde : Math.round((completed / total) * 90);
+                                pBar.style.width = yuzde + '%';
+                                const durumIcon = data.hata ? '❌' : '⏳';
+                                pText.innerHTML = `${durumIcon} <b>${completed}/${total}</b><br><span style="color:var(--muted); font-size:0.85rem;">${data.current_title}</span>`;
                             }
                             else if (data.type === 'synthesizing') {
-                                pText.innerHTML = `🧠 <b>Bülten yazılıyor...</b>`;
+                                pText.innerHTML = `🧠 <b>Tüm videolar okundu! Bülten yazılıyor...</b>`;
                                 pBar.style.width = "95%";
                             }
                             else if (data.type === 'result') {
@@ -571,12 +863,20 @@ FULL_HTML_TEMPLATE = """
 """
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+async def index():
     checks_html = "".join([
-        f'<label class="item"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>'
+        f'<label class="item" id="item-{u["id"]}">'
+        f'<span class="item-text">{u["ad"]} <span id="durum-{u["id"]}" style="font-size:0.75rem; color:var(--muted)"></span></span>'
+        f'<input type="checkbox" value="{u["id"]}" class="ch">'
+        f'<span class="checkmark"></span></label>'
         for u in UNLU_LISTESI
     ])
-    return FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
+    # Önbellek durumunu JS'e göm
+    onbellek_keys = list(ONBELLEK.keys())
+    html = FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
+    html = html.replace("{ONBELLEK_KEYS}", json.dumps(onbellek_keys))
+    html = html.replace("{TOPLAM_KANAL}", str(len(UNLU_LISTESI)))
+    return html
 
 @app.post("/api/search")
 async def special_search(req: SearchRequest):
@@ -619,13 +919,102 @@ Kendi yorumunu katma. Türkçe yaz."""
         return {"html": f"<div class='card'><h3 style='color:red;'>Analiz Hatası</h3><p>{str(e)}</p></div>"}
 
 
-@app.post("/api/analyze")
+@app.get("/api/durum")
+async def guncelleme_durumu():
+    """Arka plan güncelleme durumunu döndür."""
+    return {
+        "calisiyor": ARKAPLAN_CALISIYOR,
+        "durumlar": GUNCELLEME_DURUMU,
+        "onbellekte": list(ONBELLEK.keys()),
+        "son_guncelleme": {
+            uid: ONBELLEK[uid].get("zaman", "?")
+            for uid in ONBELLEK
+        }
+    }
+
+@app.post("/api/aninda")
+async def aninda_goster(req: AnalizRequest):
+    """Önbellekteki hazır verileri anında birleştirip döndür."""
+    onbellekli = [uid for uid in req.ids if uid in ONBELLEK]
+
+    if not onbellekli:
+        return {"bos": True, "html": ""}
+
+    secilen_isimler = []
+    toplanmis_notlar = []
+    for uid in onbellekli:
+        ad = ONBELLEK[uid].get("ad", uid)
+        secilen_isimler.append(ad)
+        # Önbellekteki ham notları kullan (HTML değil)
+        notlar = ONBELLEK[uid].get("notlar", [])
+        if notlar:
+            for not_ in notlar:
+                toplanmis_notlar.append(not_)
+        else:
+            # Eski format: sadece html var, onu not olarak kullan
+            toplanmis_notlar.append(f"### {ad}\n{ONBELLEK[uid].get('html', '')}")
+
+    isimler_metni = ", ".join(secilen_isimler)
+    sentez_prompt = sentez_promptu_olustur(isimler_metni, toplanmis_notlar)
+    try:
+        final_text = await guvenli_yapay_zeka_istegi(sentez_prompt)
+        final_html = final_text.replace('```html', '').replace('```', '').strip()
+        return {"bos": False, "html": final_html}
+    except Exception as e:
+        return {"bos": False, "html": f"<div class='card'><p style='color:red;'>Hata: {str(e)}</p></div>"}
+
+
+
 async def analyze_videos(req: AnalizRequest):
     async def generate():
+        # Önce önbellekte hazır mı bak
+        onbellekten = []
+        islenecekler = []
+
+        for uid in req.ids:
+            if uid in ONBELLEK:
+                onbellekten.append(uid)
+            else:
+                islenecekler.append(uid)
+
+        # Önbellekten gelenleri birleştir
+        if onbellekten and not islenecekler:
+            # Tüm kişiler önbellekte → anında sentez
+            yield f"{json.dumps({'type': 'start', 'total': 0, 'onbellek': True})}\n"
+            yield f"{json.dumps({'type': 'synthesizing'})}\n"
+
+            secilen_isimler = []
+            toplanmis_notlar = []
+            for uid in req.ids:
+                if uid in ONBELLEK:
+                    ad = ONBELLEK[uid].get("ad", uid)
+                    secilen_isimler.append(ad)
+                    toplanmis_notlar.append(f"### {ad}\n{ONBELLEK[uid]['html']}")
+
+            isimler_metni = ", ".join(secilen_isimler)
+            sentez_prompt = sentez_promptu_olustur(isimler_metni, toplanmis_notlar)
+            try:
+                final_text = await guvenli_yapay_zeka_istegi(sentez_prompt)
+                final_html = final_text.replace('```html', '').replace('```', '').strip()
+                yield f"{json.dumps({'type': 'result', 'html': final_html})}\n"
+            except Exception as e:
+                err_html = f"<div class='card' style='border-color:red;'><p>{str(e)}</p></div>"
+                yield f"{json.dumps({'type': 'result', 'html': err_html})}\n"
+            return
+
+        # Önbellekte olmayan ya da karışık durum → normal işlem
         vids_to_process = []
         secilen_isimler = []
-        
-        for uid in req.ids:
+        toplanmis_notlar = []
+
+        # Önbellektekileri ekle
+        for uid in onbellekten:
+            ad = ONBELLEK[uid].get("ad", uid)
+            secilen_isimler.append(ad)
+            toplanmis_notlar.append(f"### {ad}\n{ONBELLEK[uid]['html']}")
+
+        # İşlenecekleri kuyruğa al
+        for uid in islenecekler:
             user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
             if user:
                 secilen_isimler.append(user["ad"])
@@ -633,32 +1022,41 @@ async def analyze_videos(req: AnalizRequest):
                 if vids:
                     for vid, title in vids:
                         vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
-        
-        if not vids_to_process:
-            yield f"{json.dumps({'type': 'error', 'message': 'Hiç video bulunamadı. YouTube engeli olabilir.'})}\n"
+
+        if not vids_to_process and not toplanmis_notlar:
+            yield f"{json.dumps({'type': 'error', 'message': 'Hiç video bulunamadı.'})}\n"
             return
 
         aktif_video_sayisi = len(vids_to_process)
-        yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
-        
-        # Semaphore(2) → 2 video paralel işle, daha hızlı
+        yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi, 'onbellek': len(onbellekten)})}\n"
+
         sem = asyncio.Semaphore(2)
-        
+        queue = asyncio.Queue()
+
         async def process_wrapper(v):
-            return await process_video(v["name"], v["vid"], v["title"], sem)
-            
-        tasks = [process_wrapper(v) for v in vids_to_process]
-        toplanmis_notlar = []
+            res = await process_video(v["name"], v["vid"], v["title"], sem, queue=queue)
+            await queue.put({"type": "done", "res": res})
+            return res
+
+        tasks = [asyncio.create_task(process_wrapper(v)) for v in vids_to_process]
         completed = 0
-        
-        for coro in asyncio.as_completed(tasks):
-            res = await coro
-            completed += 1
-            toplanmis_notlar.append(f"### {res['name']} - Video: {res['title']}\n{res['content']}")
-            yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title']})}\n"
-                
+
+        while completed < aktif_video_sayisi:
+            msg = await queue.get()
+            if msg["type"] == "subprogress":
+                yuzde = round((completed / max(aktif_video_sayisi, 1)) * 90)
+                yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': msg['durum'], 'hata': False, 'yuzde': yuzde})}\n"
+            elif msg["type"] == "done":
+                res = msg["res"]
+                completed += 1
+                yuzde = round((completed / aktif_video_sayisi) * 90)
+                toplanmis_notlar.append(f"### {res['name']} - Video: {res['title']}\n{res['content']}")
+                yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title'], 'hata': res.get('hata', False), 'yuzde': yuzde})}\n"
+
+        await asyncio.gather(*tasks, return_exceptions=True)
+
         yield f"{json.dumps({'type': 'synthesizing'})}\n"
-        
+
         isimler_metni = ", ".join(secilen_isimler)
         sentez_prompt = sentez_promptu_olustur(isimler_metni, toplanmis_notlar)
 
