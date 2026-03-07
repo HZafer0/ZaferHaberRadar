@@ -30,14 +30,14 @@ aktif_key_sirasi = 0
 UNLU_LISTESI = [
     {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
     {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/streams"},
-    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"}, 
+    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"},
     {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
     {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/streams"},
     {"id": "t24", "ad": "T24 Haber", "url": "ytsearch5:T24 Haber son"},
     {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
     {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
-    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"}, 
-    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"}, 
+    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"},
+    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"},
     {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
 ]
 
@@ -51,67 +51,114 @@ def hafiza_yukle():
         try:
             with open(HAFIZA_DOSYASI, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except: return {}
+        except:
+            return {}
     return {}
 
 def hafiza_kaydet(hafiza_verisi):
     try:
         with open(HAFIZA_DOSYASI, "w", encoding="utf-8") as f:
             json.dump(hafiza_verisi, f, ensure_ascii=False, indent=2)
-    except: pass
+    except:
+        pass
 
 ANALIZ_HAFIZASI = hafiza_yukle()
 
+# ==========================================
+# 📝 TRANSCRIPT ALMA (GELİŞTİRİLMİŞ)
+# ==========================================
 def video_metnini_al(vid):
+    """
+    Önce Türkçe transcript dener, sonra İngilizce, 
+    sonra otomatik oluşturulmuş altyazıları dener.
+    """
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+        
+        # 1. Önce manuel Türkçe
         try:
-            transcript = transcript_list.find_transcript(['tr']).fetch()
+            transcript = transcript_list.find_manually_created_transcript(['tr']).fetch()
+            metin = " ".join([t['text'] for t in transcript])
+            return metin[:35000]
         except:
-            transcript = transcript_list.find_transcript(['en']).translate('tr').fetch()
+            pass
+        
+        # 2. Otomatik Türkçe
+        try:
+            transcript = transcript_list.find_generated_transcript(['tr']).fetch()
+            metin = " ".join([t['text'] for t in transcript])
+            return metin[:35000]
+        except:
+            pass
+        
+        # 3. Herhangi bir dil (ilk bulunan)
+        try:
+            for t in transcript_list:
+                fetched = t.fetch()
+                metin = " ".join([item['text'] for item in fetched])
+                return metin[:35000]
+        except:
+            pass
             
-        metin = " ".join([t['text'] for t in transcript])
-        return metin[:30000] 
-    except Exception:
-        return None
+    except Exception as e:
+        print(f"Transcript hatası ({vid}): {e}")
+    
+    return None
 
 # ==========================================
-# 🎧 SESİ İNDİRİP DİNLEME (RENDER UYUMLU)
+# 🎧 SES İNDİRME (SON ÇARE - GELİŞTİRİLMİŞ)
 # ==========================================
 def sesi_indir_ve_dinle(vid, key, prompt_metni):
     dosya_yolu = os.path.join(tempfile.gettempdir(), f"temp_audio_{vid}.m4a")
     try:
-        # YOUTUBE ENGELİNİ AŞMAK İÇİN ANDROID İSTEMCİSİ EKLENDİ
-        opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': dosya_yolu,
-            'quiet': True,
-            'nocheckcertificate': True,
-            'noplaylist': True,
-            'extractor_args': {'youtube': {'client': ['android']}}
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={vid}"])
-            
+        # Birden fazla client stratejisi dene
+        strategies = [
+            {'extractor_args': {'youtube': {'client': ['ios']}}},
+            {'extractor_args': {'youtube': {'client': ['android_embedded']}}},
+            {'extractor_args': {'youtube': {'client': ['web_embedded']}}},
+        ]
+        
+        downloaded = False
+        for strategy in strategies:
+            try:
+                opts = {
+                    'format': 'bestaudio[filesize<25M]/bestaudio/best',
+                    'outtmpl': dosya_yolu,
+                    'quiet': True,
+                    'nocheckcertificate': True,
+                    'noplaylist': True,
+                    **strategy
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([f"https://www.youtube.com/watch?v={vid}"])
+                if os.path.exists(dosya_yolu):
+                    downloaded = True
+                    break
+            except Exception as strat_e:
+                print(f"Strateji başarısız: {strat_e}")
+                continue
+        
+        if not downloaded:
+            raise Exception("Tüm indirme stratejileri başarısız oldu.")
+
         client = genai.Client(api_key=key)
         audio_file = client.files.upload(file=dosya_yolu)
         
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.5-flash',  
             contents=[prompt_metni, audio_file]
         )
         
-        if os.path.exists(dosya_yolu): 
+        if os.path.exists(dosya_yolu):
             os.remove(dosya_yolu)
-            
         try:
             client.files.delete(name=audio_file.name)
-        except Exception:
+        except:
             pass
             
         return response.text.strip()
     except Exception as e:
-        if os.path.exists(dosya_yolu): 
+        if os.path.exists(dosya_yolu):
             os.remove(dosya_yolu)
         raise e
 
@@ -128,61 +175,123 @@ async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
         try:
             if ses_dinle and vid:
                 res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
-                await asyncio.sleep(4)
+                await asyncio.sleep(3)
                 return res_text
             else:
                 temp_client = genai.Client(api_key=mevcut_key)
-                res = await asyncio.to_thread(temp_client.models.generate_content, model='gemini-2.5-flash', contents=prompt_metni)
-                await asyncio.sleep(4)
+                res = await asyncio.to_thread(
+                    temp_client.models.generate_content,
+                    model='gemini-2.5-flash',  
+                    contents=prompt_metni
+                )
+                await asyncio.sleep(2)
                 return res.text.strip()
         except Exception as e:
-            print(f"Uyarı: İşlem/Key hatası. Sonraki Key'e geçiliyor... Detay: {e}")
-            aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
+            err_str = str(e).lower()
+            print(f"Uyarı: Key {aktif_key_sirasi} hatası: {e}")
+            
+            # Kota bittiyse sonraki key'e geç
+            if "quota" in err_str or "429" in err_str or "rate" in err_str:
+                aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
+                await asyncio.sleep(5)
+            else:
+                await asyncio.sleep(3)
+            
             deneme_sayisi += 1
-            await asyncio.sleep(5)
             
-    return "Sistem yoğunluğu veya kota limitleri nedeniyle yapay zeka bu işlemi tamamlayamadı."
+    return "⚠️ Sistem yoğunluğu nedeniyle bu video işlenemedi."
 
+# ==========================================
+# 📡 VİDEO LİSTESİ ÇEKME (GELİŞTİRİLMİŞ)
+# ==========================================
 def get_recent_vids(query, count=3):
-    try:
-        # YOUTUBE ENGELİNİ AŞMAK İÇİN ANDROID İSTEMCİSİ EKLENDİ
-        opts = {
-            'extract_flat': True, 
-            'playlist_end': 5, 
-            'quiet': True,
-            'source_address': '0.0.0.0', 
-            'ignoreerrors': True,
-            'socket_timeout': 30,
-            'extractor_args': {'youtube': {'client': ['android']}}
-        }
-        search = query if "youtube.com" in query or "youtu.be" in query else f"ytsearch5:{query}"
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            res = ydl.extract_info(search, download=False)
-            vids = []
+    now = datetime.now()
+    limit_ts = (now - timedelta(hours=36)).timestamp()
+    limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
+    
+    # Birden fazla strateji dene
+    strategies = [
+        {'extractor_args': {'youtube': {'client': ['ios']}}},
+        {'extractor_args': {'youtube': {'client': ['android']}}},
+        {'extractor_args': {'youtube': {'client': ['web']}}},
+    ]
+    
+    for strategy in strategies:
+        try:
+            opts = {
+                'extract_flat': True,
+                'playlist_end': 8,  # Daha fazla video tara
+                'quiet': True,
+                'ignoreerrors': True,
+                'socket_timeout': 20,
+                **strategy
+            }
+            search = query if ("youtube.com" in query or "youtu.be" in query) else f"ytsearch5:{query}"
             
-            now = datetime.now()
-            limit_ts = (now - timedelta(hours=36)).timestamp()
-            limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
-            
-            if 'entries' in res:
-                for entry in res['entries']:
-                    if not entry: continue
-                    if len(vids) >= count: break
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                res = ydl.extract_info(search, download=False)
+                vids = []
+                
+                if res and 'entries' in res:
+                    for entry in res['entries']:
+                        if not entry:
+                            continue
+                        if len(vids) >= count:
+                            break
+                        
+                        vid_id = entry.get('id')
+                        title = entry.get('title', 'Video')
+                        ts = entry.get('timestamp')
+                        upload_date = entry.get('upload_date')
+                        
+                        if ts and ts >= limit_ts:
+                            vids.append((vid_id, title))
+                        elif upload_date and upload_date >= limit_date_str:
+                            vids.append((vid_id, title))
+                        elif not ts and not upload_date:
+                            # Tarih bilgisi yoksa ekle (yayınlar için)
+                            vids.append((vid_id, title))
+                
+                if vids:
+                    return vids
                     
-                    vid_id = entry.get('id')
-                    title = entry.get('title', 'Video')
-                    ts = entry.get('timestamp')
-                    upload_date = entry.get('upload_date')
-                    
-                    if ts and ts >= limit_ts:
-                        vids.append((vid_id, title))
-                    elif upload_date and upload_date >= limit_date_str:
-                        vids.append((vid_id, title))
-                    elif not ts and not upload_date:
-                        vids.append((vid_id, title))
-            return vids
-    except: return []
+        except Exception as e:
+            print(f"Video çekme stratejisi başarısız: {e}")
+            continue
+    
+    return []
 
+# ==========================================
+# 🎯 VİDEO ÖZET PROMPT (GELİŞTİRİLMİŞ)
+# ==========================================
+def ozetleme_promptu_olustur(name, kaynak="altyazi"):
+    return f"""Sen bir haber analisti asistanısın.
+
+KİŞİ: {name}
+KAYNAK: Bu videonun {kaynak} metni sana verilmiştir.
+
+GÖREVİN:
+Bu kişinin videosunda hangi güncel haber/olay konularından bahsettiğini ve her konu hakkında ne düşündüğünü çıkar.
+
+ÇIKTI FORMATI (kesinlikle bu formatta yaz):
+KONU: [Konu başlığı]
+YORUM: {name} bu konuda [yorumu/görüşü] dedi.
+
+---
+KONU: [Konu başlığı 2]
+YORUM: {name} bu konuda [yorumu/görüşü] dedi.
+
+KURALLAR:
+- Sadece videoda gerçekten bahsedilen konuları yaz
+- Kişinin ağzından çıkmayan hiçbir şeyi uydurma
+- En az 3, en fazla 7 konu çıkar
+- Her yorumu 1-3 cümleyle özetle
+- Tarih/saat bilgisi ekleme
+- Türkçe yaz"""
+
+# ==========================================
+# 🔄 VİDEO İŞLEME
+# ==========================================
 async def process_video(name, vid, vtitle, sem):
     if vid in ANALIZ_HAFIZASI:
         return {"name": name, "vid": vid, "title": vtitle, "content": ANALIZ_HAFIZASI[vid]}
@@ -190,28 +299,70 @@ async def process_video(name, vid, vtitle, sem):
     async with sem:
         konusma_metni = await asyncio.to_thread(video_metnini_al, vid)
         
-        ortak_prompt = f"""Bu videoda {name} adlı kişinin gündem değerlendirmesi yer almaktadır.
-        GÖREVİN: Hangi güncel konulardan bahsettiğini ve ne yorum yaptığını özetlemek.
-        KESİN KURAL: Geçmişten olay uydurma. Kişinin ağzından çıkmayan hiçbir şeyi yazma."""
-        
         if konusma_metni:
-            prompt = f"{ortak_prompt}\n\nALTYAZI METNİ:\n{konusma_metni}"
+            prompt = ozetleme_promptu_olustur(name, "altyazı") + f"\n\nALTYAZI METNİ:\n{konusma_metni}"
             text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
         else:
-            prompt = f"{ortak_prompt}\n\nGÖREV: Ekteki ses dosyasını DİNLE ve analiz et."
+            print(f"⚠️ {vid} için altyazı bulunamadı, ses deneniyor...")
+            prompt = ozetleme_promptu_olustur(name, "ses") + "\n\nGÖREV: Ekteki ses dosyasını DİNLE ve analiz et."
             text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
         
-        if "Sistem yoğunluğu" not in text_content:
+        if "⚠️ Sistem yoğunluğu" not in text_content:
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
             
         return {"name": name, "vid": vid, "title": vtitle, "content": text_content}
 
+# ==========================================
+# 🧩 SENTEZLEYİCİ PROMPT (GELİŞTİRİLMİŞ)
+# ==========================================
+def sentez_promptu_olustur(isimler_metni, toplanmis_notlar):
+    return f"""Sen Türkiye'nin en iyi haber editörüsün.
+
+Aşağıda şu kişilerin son videolarından çıkarılmış özetler var: {isimler_metni}
+
+GÖREVİN: Bu notları ORTAK GÜNDEM KONULARINA göre grupla ve düzenli bir haber bülteni hazırla.
+
+ÖRNEK - Aynı konudan bahsedenler bir kartda toplanmalı:
+Eğer hem Fatih Altaylı hem Cüneyt Özdemir "ekonomi krizi"nden bahsettiyse → tek kartta iki yorum yan yana.
+Eğer sadece biri bir konudan bahsettiyse → yine de o konu için kart aç.
+
+KESİN YASAKLAR:
+1. Tarih/saat bilgisi ekleme
+2. Listede olmayan kişilerin adını kullanma (sadece: {isimler_metni})
+3. Uydurma bilgi ekleme — sadece verilen notlardaki bilgileri kullan
+4. Markdown kullanma (**, ##, * vs. yasak)
+
+ÇIKTI: Sadece saf HTML ver, başka hiçbir şey yazma.
+
+HTML FORMATI (her konu için bir kart):
+
+<div class='card'>
+    <div class='card-header'><span class='badge'>GÜNDEM</span></div>
+    <h3 class='vid-title'>📌 [Konu Başlığı]</h3>
+    <div class='topic'>
+        <p style='margin-top:0; font-weight:bold;'>Olay Nedir?</p>
+        <p style='color:var(--muted);'>[2-3 cümlelik özet]</p>
+        <hr>
+        <p style='font-weight:bold;'>Kim Ne Dedi?</p>
+        <ul>
+            <li><b>[Kişi Adı]:</b> [Görüşü 1-2 cümle]</li>
+            <li><b>[Kişi Adı 2]:</b> [Görüşü 1-2 cümle]</li>
+        </ul>
+    </div>
+</div>
+
+İŞTE TOPLANAN NOTLAR:
+{chr(10).join(toplanmis_notlar)}"""
+
+# ==========================================
+# 🚀 FASTAPI UYGULAMASI
+# ==========================================
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -224,7 +375,7 @@ class SearchRequest(BaseModel):
     q: str
 
 # ==========================================
-# 🖥️ FULL HTML ARAYÜZ
+# 🖥️ HTML ARAYÜZ
 # ==========================================
 FULL_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -264,13 +415,14 @@ FULL_HTML_TEMPLATE = """
         .btn-d { background: var(--bg); border: 1px solid var(--border); color: var(--t); }
         .item { padding: 12px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-radius: 8px; }
         .item input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
-        .checkmark { height: 22px; width: 22px; background-color: var(--bg); border: 2px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+        .checkmark { height: 22px; width: 22px; background-color: var(--bg); border: 2px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .item input:checked ~ .checkmark { background-color: var(--p); border-color: var(--p); }
         .checkmark:after { content: ""; display: none; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); margin-bottom: 2px; }
         .item input:checked ~ .checkmark:after { display: block; }
         #progress-container { display: none; margin-bottom: 30px; background: var(--c); padding: 20px; border-radius: 12px; border: 1px solid var(--border); }
         .progress-bg { background: var(--border); height: 8px; border-radius: 10px; overflow: hidden; margin-top: 15px; }
         .progress-bar { width: 0%; height: 100%; background: var(--p); transition: width 0.4s ease; }
+        .error-note { background: rgba(255,71,87,0.1); border: 1px solid var(--p); border-radius: 8px; padding: 10px; margin-top: 10px; font-size: 0.85rem; color: var(--p); }
     </style>
 </head>
 <body class="dark">
@@ -294,16 +446,15 @@ FULL_HTML_TEMPLATE = """
         
         <div id="specialSearchArea" style="display:none; margin-bottom: 15px; padding:15px; background:var(--bg); border:1px solid var(--border); border-radius:8px;">
             <input type="text" id="src" placeholder="YouTube Linki veya Kelime" style="width:100%; padding:10px; margin-bottom:10px; border-radius:5px; border:1px solid var(--border); background:var(--c); color:var(--t); outline:none;">
-            <button class="btn-s" style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
+            <button style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" style="background:var(--bg); color:var(--t); border:1px solid var(--border);" onclick="alert('ZAFER RADARI v3.3\\nYouTube Engel Aşici Sürüm')">HAKKINDA</button>
-        
+        <button class="btn-d" onclick="alert('ZAFER RADARI v4.0\\nGeliştirilmiş YouTube & AI Sürümü')">HAKKINDA</button>
     </div>
 
     <div id="main">
         <div id="progress-container">
-            <div id="p-text" style="font-weight:bold;">Analiz Başlıyor... (Sesi dinlemek vakit alabilir)</div>
+            <div id="p-text" style="font-weight:bold;">Analiz Başlıyor...</div>
             <div class="progress-bg"><div class="progress-bar" id="p-bar"></div></div>
         </div>
         <div id="box">
@@ -323,7 +474,6 @@ FULL_HTML_TEMPLATE = """
         async function searchSpecial() {
             const q = document.getElementById('src').value;
             if(!q) return alert("Lütfen bir link veya kelime girin!");
-            
             if (window.innerWidth <= 768) document.getElementById('side').classList.remove('mobile-open');
             
             const box = document.getElementById('box');
@@ -333,7 +483,7 @@ FULL_HTML_TEMPLATE = """
             
             box.innerHTML = "";
             pContainer.style.display = "block"; pBar.style.width = "50%";
-            pText.innerHTML = `🔍 <b>Özel analiz yapılıyor (Sesi dinlemek biraz sürebilir)...</b>`;
+            pText.innerHTML = `🔍 <b>Özel analiz yapılıyor...</b>`;
             
             try {
                 const response = await fetch('/api/search', { 
@@ -342,14 +492,12 @@ FULL_HTML_TEMPLATE = """
                     body: JSON.stringify({q: q}) 
                 });
                 const data = await response.json();
-                
                 pBar.style.width = "100%";
                 pText.innerHTML = `✅ <b>Analiz tamamlandı!</b>`;
                 box.innerHTML = data.html;
-                
-                setTimeout(() => { pContainer.style.display = 'none'; }, 4000);
+                setTimeout(() => { pContainer.style.display = 'none'; }, 3000);
             } catch(e) { 
-                pText.innerText = "Hata oluştu."; 
+                pText.innerText = "Hata oluştu: " + e.message;
             }
         }
 
@@ -365,45 +513,57 @@ FULL_HTML_TEMPLATE = """
             
             box.innerHTML = "";
             pContainer.style.display = "block"; pBar.style.width = "0%";
-            pText.innerText = "Videolar kontrol ediliyor...";
+            pText.innerText = "Videolar aranıyor...";
             
             try {
-                const response = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: ids}) });
+                const response = await fetch('/api/analyze', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({ids: ids}) 
+                });
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
-                let completed = 0; let total = 0; let buffer = ""; 
+                let completed = 0, total = 0, buffer = "";
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     buffer += decoder.decode(value, {stream: true});
                     const lines = buffer.split('\\n');
-                    buffer = lines.pop(); 
+                    buffer = lines.pop();
 
                     for (let line of lines) {
                         if (!line.trim()) continue;
                         try {
                             const data = JSON.parse(line);
                             if (data.type === 'start') {
-                                total = data.total; pText.innerHTML = `🎯 <b>${total} video bulundu. Okunuyor/Dinleniyor...</b>`; 
+                                total = data.total; 
+                                pText.innerHTML = `🎯 <b>${total} video bulundu, işleniyor...</b>`;
                             } 
                             else if (data.type === 'progress') {
                                 completed = data.completed;
                                 pBar.style.width = Math.round((completed / total) * 100) + '%';
-                                pText.innerHTML = `⚡ <b>İşleniyor:</b> <span style="color:var(--muted)">${data.current_title}</span>`;
+                                pText.innerHTML = `⚡ <b>${completed}/${total}</b> — <span style="color:var(--muted)">${data.current_title}</span>`;
                             }
                             else if (data.type === 'synthesizing') {
-                                pText.innerHTML = `🧠 <b>Tüm veriler dinlendi/okundu! Ortak bülten yazılıyor...</b>`;
+                                pText.innerHTML = `🧠 <b>Bülten yazılıyor...</b>`;
+                                pBar.style.width = "95%";
                             }
                             else if (data.type === 'result') {
-                                pText.innerHTML = `✅ <b>Haber Bülteni Hazır!</b>`;
-                                if (data.html) { box.innerHTML = data.html; }
+                                pBar.style.width = "100%";
+                                pText.innerHTML = `✅ <b>Hazır!</b>`;
+                                if (data.html) box.innerHTML = data.html;
+                                setTimeout(() => { pContainer.style.display = 'none'; }, 3000);
+                            }
+                            else if (data.type === 'error') {
+                                pText.innerHTML = `❌ <b>Hata:</b> ${data.message}`;
                             }
                         } catch(err) {}
                     }
                 }
-                setTimeout(() => { pContainer.style.display = 'none'; }, 4000);
-            } catch(e) { pText.innerText = "Hata oluştu."; }
+            } catch(e) { 
+                pText.innerText = "Bağlantı hatası: " + e.message; 
+            }
         }
     </script>
 </body>
@@ -412,36 +572,45 @@ FULL_HTML_TEMPLATE = """
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    checks_html = "".join([f'<label class="item"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>' for u in UNLU_LISTESI])
+    checks_html = "".join([
+        f'<label class="item"><span class="item-text">{u["ad"]}</span><input type="checkbox" value="{u["id"]}" class="ch"><span class="checkmark"></span></label>'
+        for u in UNLU_LISTESI
+    ])
     return FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
 
 @app.post("/api/search")
 async def special_search(req: SearchRequest):
     vids = await asyncio.to_thread(get_recent_vids, req.q, 1)
     if not vids:
-        return {"html": "<div class='card'><h3 style='color:red;'>Video bulunamadı veya işlenemedi! Linki kontrol et.</h3></div>"}
+        return {"html": "<div class='card'><h3 style='color:red;'>❌ Video bulunamadı!</h3><p>YouTube engeli veya geçersiz link olabilir. Direkt video linki deneyin.</p></div>"}
     
     vid, title = vids[0]
-    
     konusma_metni = await asyncio.to_thread(video_metnini_al, vid)
-    ortak_prompt = f"Bu video '{title}' başlığına sahiptir. İçinde konuşulanları ve gündem maddelerini detaylıca, madde madde özetle. Kendi yorumunu katma."
+    
+    kaynak = "altyazı" if konusma_metni else "ses"
+    ortak_prompt = f"""Bu video "{title}" başlığına sahiptir.
+İçinde konuşulanları ve gündem maddelerini detaylıca, madde madde özetle.
+Kendi yorumunu katma. Türkçe yaz."""
     
     try:
         if konusma_metni:
-            prompt = f"{ortak_prompt}\n\nALTYAZI METNİ:\n{konusma_metni}"
+            prompt = ortak_prompt + f"\n\nALTYAZI METNİ:\n{konusma_metni}"
             text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
         else:
-            prompt = f"{ortak_prompt}\n\nGÖREV: Ekteki ses dosyasını DİNLE ve detaylıca analiz et."
+            prompt = ortak_prompt + "\n\nGÖREV: Ekteki ses dosyasını DİNLE ve detaylıca analiz et."
             text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
             
-        formatted_content = text_content.replace('\n', '<br>').replace('**', '')
+        formatted_content = text_content.replace('\n', '<br>').replace('**', '').replace('##', '')
         
         html_cikti = f"""
         <div class='card' style='border-left-color: #1f6feb;'>
-            <div class='card-header'><span class='badge' style='background:#1f6feb;'>ÖZEL ANALİZ</span></div>
+            <div class='card-header'>
+                <span class='badge' style='background:#1f6feb;'>ÖZEL ANALİZ</span>
+                <span style='font-size:0.8rem; color:var(--muted); margin-left:10px;'>Kaynak: {kaynak}</span>
+            </div>
             <h3 class='vid-title'>{title}</h3>
             <div class='topic'>
-                <p style='color:var(--t); line-height: 1.6;'>{formatted_content}</p>
+                <p style='color:var(--t); line-height: 1.7;'>{formatted_content}</p>
             </div>
         </div>
         """
@@ -465,10 +634,15 @@ async def analyze_videos(req: AnalizRequest):
                     for vid, title in vids:
                         vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
         
+        if not vids_to_process:
+            yield f"{json.dumps({'type': 'error', 'message': 'Hiç video bulunamadı. YouTube engeli olabilir.'})}\n"
+            return
+
         aktif_video_sayisi = len(vids_to_process)
         yield f"{json.dumps({'type': 'start', 'total': aktif_video_sayisi})}\n"
         
-        sem = asyncio.Semaphore(1) 
+        # Semaphore(2) → 2 video paralel işle, daha hızlı
+        sem = asyncio.Semaphore(2)
         
         async def process_wrapper(v):
             return await process_video(v["name"], v["vid"], v["title"], sem)
@@ -480,39 +654,13 @@ async def analyze_videos(req: AnalizRequest):
         for coro in asyncio.as_completed(tasks):
             res = await coro
             completed += 1
-            toplanmis_notlar.append(f"KİŞİ ({res['name']}): {res['content']}")
+            toplanmis_notlar.append(f"### {res['name']} - Video: {res['title']}\n{res['content']}")
             yield f"{json.dumps({'type': 'progress', 'completed': completed, 'current_title': res['title']})}\n"
                 
         yield f"{json.dumps({'type': 'synthesizing'})}\n"
         
         isimler_metni = ", ".join(secilen_isimler)
-        sentez_prompt = f"""
-        Aşağıda Türkiye'deki {isimler_metni} isimli kişilerin son videolarından (dinlenerek/okunarak) çıkarılmış özetler var.
-        GÖREVİN: Bu notları olaylara (konulara) göre birleştirmek.
-
-        KIRMIZI ÇİZGİLER VE YASAKLAR (BUNLARA UYMAZSAN SİSTEM ÇÖKER):
-        1. TARİH VE SAAT KESİNLİKLE YASAK! Kimin ne dediğini yazarken yanına "Tarih/Saat" EKLEME. 
-        2. KİŞİ SINIRI: SADECE listemdeki şu kişilerin adını yazabilirsin: {isimler_metni}. Metinlerde geçse bile listede olmayan birinin adını "Kim Ne Dedi" kısmına ASLA yazma.
-        3. GEÇMİŞ BİLGİ YASAK: 2024 veya öncesine ait hiçbir uydurma olay ekleme. Sadece verilen metindeki sıcak gündemi yaz.
-
-        Lütfen SADECE şu HTML formatını kullanarak hazırla (Markdown kullanma, sadece saf HTML kodu ver):
-
-        <div class='card'>
-            <div class='card-header'><span class='badge'>GÜNDEM MADDESİ</span></div>
-            <h3 class='vid-title'>📌 [Ortak veya Tekil Konu Adı]</h3>
-            <div class='topic'>
-                <p style='margin-top:0; font-weight:bold;'>Olay Nedir?</p>
-                <p style='color:var(--muted);'>[Olayın özeti]</p>
-                <hr>
-                <p style='font-weight:bold;'>Kim Ne Dedi?</p>
-                <ul>
-                    </ul>
-            </div>
-        </div>
-
-        İŞTE TOPLANAN NOTLAR:
-        {" ".join(toplanmis_notlar)}
-        """
+        sentez_prompt = sentez_promptu_olustur(isimler_metni, toplanmis_notlar)
 
         try:
             final_text = await guvenli_yapay_zeka_istegi(sentez_prompt, ses_dinle=False)
