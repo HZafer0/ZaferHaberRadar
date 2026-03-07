@@ -142,6 +142,9 @@ def sesi_indir_ve_transkribe_et(vid):
     benzersiz_id = uuid.uuid4().hex[:8]
     dosya_yolu = os.path.join(tempfile.gettempdir(), f"audio_{vid}_{benzersiz_id}.m4a")
 
+    cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+    cookie_opt = {'cookiefile': cookie_dosyasi} if os.path.exists(cookie_dosyasi) else {}
+
     strategies = [
         {'extractor_args': {'youtube': {'client': ['ios']}}},
         {'extractor_args': {'youtube': {'client': ['android']}}},
@@ -158,6 +161,7 @@ def sesi_indir_ve_transkribe_et(vid):
                 'no_warnings': True,
                 'nocheckcertificate': True,
                 'noplaylist': True,
+                **cookie_opt,
                 **strategy
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -266,17 +270,21 @@ def get_recent_vids(query, count=3):
     limit_ts = (now - timedelta(hours=36)).timestamp()
     limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
 
+    # Cookie dosyası varsa ekle (Render bot engelini aşmak için)
+    cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+    cookie_opt = {'cookiefile': cookie_dosyasi} if os.path.exists(cookie_dosyasi) else {}
+
     strategies = [
         {'extractor_args': {'youtube': {'client': ['ios']}}},
         {'extractor_args': {'youtube': {'client': ['android']}}},
         {'extractor_args': {'youtube': {'client': ['web']}}},
     ]
 
+    is_url = "youtube.com" in query or "youtu.be" in query
+    search = query if is_url else f"ytsearch10:{query}"
+
     for strategy in strategies:
         try:
-            is_url = "youtube.com" in query or "youtu.be" in query
-            search = query if is_url else f"ytsearch5:{query}"
-
             opts = {
                 'extract_flat': True,
                 'playlistend': 10,
@@ -284,6 +292,7 @@ def get_recent_vids(query, count=3):
                 'no_warnings': True,
                 'ignoreerrors': True,
                 'socket_timeout': 25,
+                **cookie_opt,
                 **strategy
             }
 
@@ -298,7 +307,7 @@ def get_recent_vids(query, count=3):
                 entries = [res]
 
             flat_entries = []
-            for e in entries:
+            for e in (entries or []):
                 if not e:
                     continue
                 if e.get('entries'):
@@ -313,14 +322,12 @@ def get_recent_vids(query, count=3):
 
                 vid_id = entry.get('id')
                 title = entry.get('title', 'Video')
-
-                if not vid_id:
+                if not vid_id or vid_id.startswith('ytsearch'):
                     continue
 
                 ts = entry.get('timestamp')
                 upload_date = entry.get('upload_date')
 
-                # Tarih varsa kontrol et
                 if ts:
                     if ts < limit_ts:
                         print(f"⏭️ 36s dışında, duruldu: {title[:50]}")
@@ -334,48 +341,38 @@ def get_recent_vids(query, count=3):
                     print(f"✅ 36s içinde: {title[:50]}")
                     vids.append((vid_id, title))
                 else:
-                    # Tarih yok → videonun detayını çek (tek istek, hızlı)
+                    # Tarih yok → videonun detayını çek
                     print(f"🔍 Tarih yok, detay çekiliyor: {title[:50]}")
                     try:
                         detail_opts = {
                             'quiet': True, 'no_warnings': True,
                             'skip_download': True, 'socket_timeout': 10,
-                            **strategy
+                            **cookie_opt, **strategy
                         }
                         with yt_dlp.YoutubeDL(detail_opts) as ydl2:
                             detail = ydl2.extract_info(
                                 f"https://www.youtube.com/watch?v={vid_id}",
                                 download=False
                             )
-                        if detail:
-                            ts2 = detail.get('timestamp')
-                            ud2 = detail.get('upload_date')
-                            if ts2:
-                                if ts2 < limit_ts:
-                                    print(f"⏭️ 36s dışında: {title[:50]}")
-                                    break
-                                vids.append((vid_id, title))
-                            elif ud2:
-                                if ud2 < limit_date_str:
-                                    print(f"⏭️ 36s dışında: {title[:50]}")
-                                    break
-                                vids.append((vid_id, title))
-                            else:
-                                print(f"⚠️ Tarih alınamadı, atlandı: {title[:50]}")
+                        ts2 = detail.get('timestamp') if detail else None
+                        ud2 = detail.get('upload_date') if detail else None
+                        if ts2:
+                            if ts2 < limit_ts:
+                                print(f"⏭️ 36s dışında: {title[:50]}")
+                                break
+                            vids.append((vid_id, title))
+                        elif ud2:
+                            if ud2 < limit_date_str:
+                                print(f"⏭️ 36s dışında: {title[:50]}")
+                                break
+                            vids.append((vid_id, title))
                         else:
-                            print(f"⚠️ Detay alınamadı, atlandı: {title[:50]}")
+                            print(f"⚠️ Tarih alınamadı, atlandı: {title[:50]}")
                     except Exception as de:
                         print(f"⚠️ Detay hatası, atlandı: {de}")
 
             if vids:
                 return vids
-
-        except Exception as e:
-            print(f"Strateji başarısız: {e}")
-            continue
-
-    print(f"❌ Hiç video bulunamadı: {query[:60]}")
-    return []
 
         except Exception as e:
             print(f"Strateji başarısız: {e}")
@@ -986,16 +983,25 @@ Kendi yorumunu katma. Türkçe yaz."""
 
 @app.get("/api/durum")
 async def guncelleme_durumu():
-    """Arka plan güncelleme durumunu döndür."""
+    cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
     return {
         "calisiyor": ARKAPLAN_CALISIYOR,
         "durumlar": GUNCELLEME_DURUMU,
         "onbellekte": list(ONBELLEK.keys()),
-        "son_guncelleme": {
-            uid: ONBELLEK[uid].get("zaman", "?")
-            for uid in ONBELLEK
-        }
+        "cookie_var": os.path.exists(cookie_dosyasi),
+        "son_guncelleme": {uid: ONBELLEK[uid].get("zaman", "?") for uid in ONBELLEK}
     }
+
+from fastapi import UploadFile, File
+
+@app.post("/api/cookie-yukle")
+async def cookie_yukle(file: UploadFile = File(...)):
+    """YouTube cookie dosyasını yükle (bot engelini aşmak için)."""
+    cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+    icerik = await file.read()
+    with open(cookie_dosyasi, "wb") as f:
+        f.write(icerik)
+    return {"durum": "ok", "mesaj": "Cookie yüklendi."}
 
 @app.post("/api/aninda")
 async def aninda_goster(req: AnalizRequest):
