@@ -4,20 +4,20 @@ import asyncio
 import json
 import os
 import tempfile
+import httpx
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google import genai
 from typing import List
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
-# 🔐 5'Lİ API KEY SİSTEMİ
+# 🔐 GROQ API KEY SİSTEMİ
 # ==========================================
-KEYS_STRING = os.environ.get("GEMINI_KEYS", "KEY_1, KEY_2, KEY_3, KEY_4, KEY_5")
-API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip()]
+KEYS_STRING = os.environ.get("GROQ_KEYS", "KEY_1,KEY_2,KEY_3,KEY_4,KEY_5")
+API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip() and not k.strip().startswith("KEY_")]
 
 if not API_KEYS:
     API_KEYS = ["DUMMY_KEY"]
@@ -92,22 +92,16 @@ ONBELLEK = onbellek_yukle()
 # 📝 TRANSCRIPT ALMA (YENİ API UYUMLU)
 # ==========================================
 def video_metnini_al(vid):
-    """
-    youtube-transcript-api yeni versiyonu için güncellendi.
-    fetch() artık doğrudan çağrılıyor, list_transcripts() yerine.
-    """
-    # Yöntem 1: Yeni API - direkt fetch (v0.6+)
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-        # Yeni API: fetch() metodu
-        transcript = YouTubeTranscriptApi.fetch(vid, languages=['tr', 'en'])
+        from youtube_transcript_api import YouTubeTranscriptApi, FetchedTranscript
+        # Yeni API (v0.6+): fetch() video_id keyword argümanı ister
+        transcript = YouTubeTranscriptApi.fetch(video_id=vid, languages=['tr', 'en'])
         metin = " ".join([t.get('text', '') if isinstance(t, dict) else t.text for t in transcript])
         if metin.strip():
             return metin[:35000]
     except Exception as e1:
         print(f"Transcript yöntem-1 hatası ({vid}): {e1}")
-    
-    # Yöntem 2: Eski API - list_transcripts
+
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
@@ -119,7 +113,6 @@ def video_metnini_al(vid):
                     return metin[:35000]
             except:
                 continue
-        # Herhangi bir dil
         for t in transcript_list:
             try:
                 fetched = t.fetch()
@@ -130,6 +123,8 @@ def video_metnini_al(vid):
                 continue
     except Exception as e2:
         print(f"Transcript yöntem-2 hatası ({vid}): {e2}")
+    except Exception as e2:
+        print(f"Transcript yöntem-2 hatası ({vid}): {e2}")
 
     return None
 
@@ -138,81 +133,71 @@ _indirme_kilitleri = {}
 _indirme_kilitleri_lock = asyncio.Lock()
 
 # ==========================================
-# 🎧 SES İNDİRME (DOSYA KİLİDİ + JS UYARI FİXİ)
+# 🎧 SES İNDİRME + GROQ WHISPER TRANSKRİPSYON
 # ==========================================
-def sesi_indir_ve_dinle(vid, key, prompt_metni):
-    # Her video için benzersiz dosya adı (çakışma önleme)
+def sesi_indir_ve_transkribe_et(vid):
+    """Sesi indir, Groq Whisper ile yazıya çevir."""
     import uuid
+    import glob as glob_mod
     benzersiz_id = uuid.uuid4().hex[:8]
     dosya_yolu = os.path.join(tempfile.gettempdir(), f"audio_{vid}_{benzersiz_id}.m4a")
-    
+
+    strategies = [
+        {'extractor_args': {'youtube': {'client': ['ios']}}},
+        {'extractor_args': {'youtube': {'client': ['android']}}},
+        {'extractor_args': {'youtube': {'client': ['web']}}},
+    ]
+
+    downloaded = False
+    for strategy in strategies:
+        try:
+            opts = {
+                'format': 'bestaudio[filesize<25M]/bestaudio/best',
+                'outtmpl': dosya_yolu,
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'noplaylist': True,
+                **strategy
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={vid}"])
+            bulunan = glob_mod.glob(dosya_yolu.replace('.m4a', '.*'))
+            if bulunan:
+                dosya_yolu = bulunan[0]
+                downloaded = True
+                break
+            elif os.path.exists(dosya_yolu):
+                downloaded = True
+                break
+        except Exception as e:
+            print(f"İndirme stratejisi başarısız: {e}")
+            for f in glob_mod.glob(dosya_yolu.replace('.m4a', '.*')):
+                try: os.remove(f)
+                except: pass
+
+    if not downloaded:
+        raise Exception("Ses indirilemedi.")
+
+    # Groq Whisper ile transkribe et
+    key = API_KEYS[aktif_key_sirasi]
     try:
-        strategies = [
-            {'extractor_args': {'youtube': {'client': ['ios']}}},
-            {'extractor_args': {'youtube': {'client': ['android']}}},
-            {'extractor_args': {'youtube': {'client': ['web']}}},
-        ]
-        
-        downloaded = False
-        for strategy in strategies:
-            try:
-                opts = {
-                    'format': 'bestaudio[filesize<30M]/bestaudio/best',
-                    'outtmpl': dosya_yolu,
-                    'quiet': True,
-                    'no_warnings': True,       # JS runtime uyarılarını sustur
-                    'nocheckcertificate': True,
-                    'noplaylist': True,
-                    'noprogress': False,
-                    **strategy
-                }
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([f"https://www.youtube.com/watch?v={vid}"])
-                # İndirilen dosyayı bul (.m4a veya .webm olabilir)
-                import glob
-                bulunan = glob.glob(dosya_yolu.replace('.m4a', '.*'))
-                if bulunan:
-                    dosya_yolu = bulunan[0]
-                    downloaded = True
-                    break
-                elif os.path.exists(dosya_yolu):
-                    downloaded = True
-                    break
-            except Exception as strat_e:
-                print(f"Strateji başarısız: {strat_e}")
-                # Yarım kalan dosyayı temizle
-                for f in glob.glob(dosya_yolu.replace('.m4a', '.*')):
-                    try: os.remove(f)
-                    except: pass
-                continue
-        
-        if not downloaded:
-            raise Exception("Tüm ses indirme stratejileri başarısız oldu.")
-
-        client = genai.Client(api_key=key)
-        audio_file = client.files.upload(file=dosya_yolu)
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[prompt_metni, audio_file]
-        )
-        
-        try:
-            if os.path.exists(dosya_yolu): os.remove(dosya_yolu)
-        except: pass
-        try:
-            client.files.delete(name=audio_file.name)
-        except:
-            pass
-            
+        with open(dosya_yolu, 'rb') as f:
+            import httpx as httpx_mod
+            response = httpx_mod.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {key}"},
+                data={"model": "whisper-large-v3", "language": "tr", "response_format": "text"},
+                files={"file": (os.path.basename(dosya_yolu), f, "audio/m4a")},
+                timeout=120
+            )
+        response.raise_for_status()
         return response.text.strip()
-    except Exception as e:
-        try:
-            if os.path.exists(dosya_yolu): os.remove(dosya_yolu)
+    finally:
+        try: os.remove(dosya_yolu)
         except: pass
-        raise e
 
-# Global API semaphore — aynı anda max 1 Gemini isteği (429'u önler)
+# Global API semaphore
 _api_sem = None
 
 def get_api_sem():
@@ -222,46 +207,56 @@ def get_api_sem():
     return _api_sem
 
 # ==========================================
-# 🤖 GÜVENLİ YAPAY ZEKA MOTORU
+# 🤖 GROQ LLM — METİN ÖZETLEME
 # ==========================================
-async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
+async def groq_llm_iste(prompt_metni):
+    """Groq LLaMA ile metin özetleme — key rotasyonlu."""
     global aktif_key_sirasi
     toplam_key = len(API_KEYS)
     deneme_sayisi = 0
-    
-    async with get_api_sem():  # Aynı anda sadece 1 API isteği
-        while deneme_sayisi < toplam_key:
-            mevcut_key = API_KEYS[aktif_key_sirasi]
+
+    async with get_api_sem():
+        while deneme_sayisi < toplam_key * 2:
+            key = API_KEYS[aktif_key_sirasi]
             try:
-                if ses_dinle and vid:
-                    res_text = await asyncio.to_thread(sesi_indir_ve_dinle, vid, mevcut_key, prompt_metni)
-                    await asyncio.sleep(4)
-                    return res_text
-                else:
-                    temp_client = genai.Client(api_key=mevcut_key)
-                    res = await asyncio.to_thread(
-                        temp_client.models.generate_content,
-                        model='gemini-2.5-flash',
-                        contents=prompt_metni
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": "llama-3.3-70b-versatile",
+                            "messages": [{"role": "user", "content": prompt_metni}],
+                            "max_tokens": 4096,
+                            "temperature": 0.3
+                        }
                     )
-                    await asyncio.sleep(3)  # Rate limit önleme
-                    return res.text.strip()
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
             except Exception as e:
                 err_str = str(e).lower()
-                print(f"Uyarı: Key {aktif_key_sirasi} hatası: {e}")
-                
-                if "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str:
-                    # Bu key'in kotası bitti, sonrakine geç ve bekle
+                print(f"Uyarı: Groq Key {aktif_key_sirasi} hatası: {e}")
+                if "429" in err_str or "rate" in err_str or "quota" in err_str:
                     aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
-                    await asyncio.sleep(10)  # Key değişince 10sn bekle
-                elif "winError 32" in err_str or "dosya" in err_str:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(10)
                 else:
                     await asyncio.sleep(5)
-                
                 deneme_sayisi += 1
-            
-    raise Exception("Tüm API key'leri denendi, kota limiti aşıldı. Lütfen birkaç dakika bekleyip tekrar deneyin.")
+
+    raise Exception("Tüm Groq key'leri denendi, limit aşıldı.")
+
+# guvenli_yapay_zeka_istegi → artık Groq kullanıyor
+async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
+    if ses_dinle and vid:
+        # Sesi indir → Whisper ile transkribe et → LLaMA ile özetle
+        transkript = await asyncio.to_thread(sesi_indir_ve_transkribe_et, vid)
+        tam_prompt = f"{prompt_metni}\n\nVİDEO TRANSKRİPTİ:\n{transkript[:30000]}"
+        return await groq_llm_iste(tam_prompt)
+    else:
+        return await groq_llm_iste(prompt_metni)
 
 # ==========================================
 # 📡 VİDEO LİSTESİ ÇEKME
@@ -840,7 +835,23 @@ FULL_HTML_TEMPLATE = """
                         if (!line.trim()) continue;
                         try {
                             const data = JSON.parse(line);
-                            if (data.type === 'start') {
+                            if (data.type === 'scanning') {
+                                // Kişi için video aranıyor
+                                const el = document.getElementById('durum-' + data.uid);
+                                if (el) el.innerHTML = '<span style="color:#888; font-size:0.7rem;">🔍</span>';
+                            }
+                            else if (data.type === 'vid_count') {
+                                // Kişi için kaç video bulundu
+                                const el = document.getElementById('durum-' + data.uid);
+                                if (el) {
+                                    if (data.count === 0) {
+                                        el.innerHTML = '<span style="background:rgba(255,255,255,0.08); color:#666; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">yeni yok</span>';
+                                    } else {
+                                        el.innerHTML = '<span style="background:rgba(99,179,237,0.15); color:#63b3ed; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">' + data.count + ' video</span>';
+                                    }
+                                }
+                            }
+                            else if (data.type === 'start') {
                                 total = data.total;
                                 if (data.onbellek > 0 && total === 0) {
                                     pText.innerHTML = `⚡ <b>Tüm veriler önbellekte! Sentezleniyor...</b>`;
@@ -1033,12 +1044,17 @@ async def analyze_videos(req: AnalizRequest):
             secilen_isimler.append(ad)
             toplanmis_notlar.append(f"### {ad}\n{ONBELLEK[uid]['html']}")
 
-        # İşlenecekleri kuyruğa al
+        # İşlenecekleri kuyruğa al — video yoksa anında geç
         for uid in islenecekler:
             user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
             if user:
                 secilen_isimler.append(user["ad"])
+                # Video aramadan önce frontend'e "tarıyorum" mesajı gönder
+                yield f"{json.dumps({'type': 'scanning', 'uid': uid, 'ad': user['ad']})}\n"
                 vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
+                vid_sayisi = len(vids)
+                # Kaç video bulunduğunu frontend'e bildir
+                yield f"{json.dumps({'type': 'vid_count', 'uid': uid, 'count': vid_sayisi})}\n"
                 if vids:
                     for vid, title in vids:
                         vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
