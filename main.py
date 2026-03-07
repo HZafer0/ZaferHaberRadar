@@ -29,15 +29,15 @@ aktif_key_sirasi = 0
 # ==========================================
 UNLU_LISTESI = [
     {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
-    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/streams"},
+    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/videos"},
     {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"},
     {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
-    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/streams"},
-    {"id": "t24", "ad": "T24 Haber", "url": "ytsearch5:T24 Haber son"},
+    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
+    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24habertv/videos"},
     {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
     {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
-    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch3:Cem Gürdeniz Veryansın son"},
-    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch3:Erdem Atay Veryansın son"},
+    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch5:Cem Gürdeniz"},
+    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch5:Erdem Atay"},
     {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
 ]
 
@@ -823,9 +823,9 @@ FULL_HTML_TEMPLATE = """
                 Object.entries(d.durumlar).forEach(([uid, durum]) => {
                     const el = document.getElementById('durum-' + uid);
                     if (!el) return;
-                    if (durum === 'işleniyor') el.innerHTML = '⏳';
-                    else if (durum === 'hata') el.innerHTML = '❌';
-                    else if (durum === 'video_yok') el.innerHTML = '📭';
+                    if (durum === 'işleniyor') el.innerHTML = '<span style="font-size:0.7rem;">⏳</span>';
+                    else if (durum === 'hata') el.innerHTML = '<span style="font-size:0.7rem; color:#fc8181;">❌</span>';
+                    else if (durum === 'video_yok') el.innerHTML = '<span style="background:rgba(255,255,255,0.06); color:#555; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">yeni yok</span>';
                 });
             } catch(e) {}
         }
