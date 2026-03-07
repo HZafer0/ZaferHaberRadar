@@ -528,7 +528,7 @@ async def tek_kisi_isle(uid):
             notlar.append(f"### {res['name']} - Video: {res['title']}\n{res['content']}")
 
         GUNCELLEME_DURUMU[uid] = "hazır"
-        return {"uid": uid, "notlar": notlar, "ad": user["ad"]}
+        return {"uid": uid, "notlar": notlar, "ad": user["ad"], "vid_sayisi": len(vids)}
     except Exception as e:
         print(f"Arka plan hata ({uid}): {e}")
         GUNCELLEME_DURUMU[uid] = "hata"
@@ -560,7 +560,8 @@ async def arkaplan_guncelle():
                         "html": html,
                         "notlar": veri["notlar"],
                         "zaman": datetime.now().isoformat(),
-                        "ad": veri["ad"]
+                        "ad": veri["ad"],
+                        "vid_sayisi": veri.get("vid_sayisi", 0)
                     }
                     onbellek_kaydet()
                     print(f"✅ Önbellek güncellendi: {veri['ad']}")
@@ -691,30 +692,39 @@ FULL_HTML_TEMPLATE = """
                 const data = await res.json();
                 const toplam = {TOPLAM_KANAL};
                 const durum = document.getElementById('radar-durum');
+                const hazirSayisi = (data.onbellekte || []).filter(uid => (data.vid_sayilari || {})[uid] > 0).length;
 
                 if (data.calisiyor) {
                     durum.innerHTML = `🔄 Arka plan taraması çalışıyor...`;
                     durum.style.color = '#fbbf24';
-                } else if (data.onbellekte && data.onbellekte.length > 0) {
-                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${data.onbellekte.length}/${toplam}</b> kanal hazır`;
+                } else if (hazirSayisi > 0) {
+                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${hazirSayisi}/${toplam}</b> kanal analiz edildi`;
                     durum.style.color = 'var(--muted)';
                 } else {
                     durum.innerHTML = `⏳ İlk tarama bekleniyor...`;
                     durum.style.color = 'var(--muted)';
                 }
 
-                // Her kişi için durum badge
                 document.querySelectorAll('.ch').forEach(cb => {
                     const uid = cb.value;
                     const el = document.getElementById('durum-' + uid);
                     if (!el) return;
+                    const vidSayisi = (data.vid_sayilari || {})[uid] || 0;
+                    const durumu = (data.durumlar || {})[uid];
+
                     if (data.onbellekte && data.onbellekte.includes(uid)) {
-                        el.innerHTML = '<span class="hazir-dot"></span>';
-                    } else if (data.durumlar && data.durumlar[uid] === 'işleniyor') {
+                        if (vidSayisi > 0) {
+                            // Video var, analiz edildi → yeşil nokta + sayı
+                            el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:3px;margin-left:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;"></span><span style="font-size:0.65rem;color:#3fb950;">${vidSayisi}</span></span>`;
+                        } else {
+                            // Önbellekte ama video yok (eski veri) → gri tire
+                            el.innerHTML = '<span style="color:#444;font-size:0.65rem;margin-left:4px;">—</span>';
+                        }
+                    } else if (durumu === 'işleniyor') {
                         el.innerHTML = '<span class="analiz-badge">⏳</span>';
-                    } else if (data.durumlar && data.durumlar[uid] === 'video_yok') {
-                        el.innerHTML = '<span style="color:#555;font-size:0.65rem;margin-left:4px;">—</span>';
-                    } else if (data.durumlar && data.durumlar[uid] === 'hata') {
+                    } else if (durumu === 'video_yok') {
+                        el.innerHTML = '<span style="color:#444;font-size:0.65rem;margin-left:4px;">—</span>';
+                    } else if (durumu === 'hata') {
                         el.innerHTML = '<span style="color:#fc8181;font-size:0.65rem;margin-left:4px;">!</span>';
                     }
                 });
@@ -953,6 +963,7 @@ async def guncelleme_durumu():
         "durumlar": GUNCELLEME_DURUMU,
         "onbellekte": list(ONBELLEK.keys()),
         "cookie_var": os.path.exists(cookie_dosyasi),
+        "vid_sayilari": {uid: ONBELLEK[uid].get("vid_sayisi", 0) for uid in ONBELLEK},
         "son_guncelleme": {uid: ONBELLEK[uid].get("zaman", "?") for uid in ONBELLEK}
     }
 
@@ -1000,6 +1011,7 @@ async def aninda_goster(req: AnalizRequest):
 
 
 
+@app.post("/api/analyze")
 async def analyze_videos(req: AnalizRequest):
     async def generate():
         # Önce önbellekte hazır mı bak
