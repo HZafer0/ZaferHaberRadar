@@ -456,31 +456,29 @@ Aşağıda şu kişilerin son videolarından çıkarılmış özetler var: {isim
 
 GÖREVİN: Bu notları ORTAK GÜNDEM KONULARINA göre grupla ve düzenli bir haber bülteni hazırla.
 
-ÖRNEK - Aynı konudan bahsedenler bir kartda toplanmalı:
-Eğer hem Fatih Altaylı hem Cüneyt Özdemir "ekonomi krizi"nden bahsettiyse → tek kartta iki yorum yan yana.
-Eğer sadece biri bir konudan bahsettiyse → yine de o konu için kart aç.
-
-KESİN YASAKLAR:
-1. Tarih/saat bilgisi ekleme
-2. Listede olmayan kişilerin adını kullanma (sadece: {isimler_metni})
-3. Uydurma bilgi ekleme — sadece verilen notlardaki bilgileri kullan
-4. Markdown kullanma (**, ##, * vs. yasak)
+KESİN KURALLAR:
+1. Her "Kim Ne Dedi?" satırında o kişinin VİDEODA NE DEDİĞİNİ yaz — "bu konuya değindi" veya "bu konuyu ele aldı" gibi boş ifadeler KESİNLİKLE YASAK
+2. Her kişinin görüşü en az 1 tam cümle olmalı, onun ağzından çıkan gerçek bir fikir içermeli
+3. Notlarda o kişi hakkında yeterli bilgi yoksa o kişiyi o kartta YAZMA
+4. Uydurma bilgi ekleme — sadece verilen notlardaki bilgileri kullan
+5. Tarih/saat bilgisi ekleme
+6. Markdown kullanma (**, ##, * vs. yasak)
+7. Her yorumun yanına küçük bir kaynak etiketi ekle: <span class='kaynak-tag'>[Video Başlığı kısaltılmış]</span>
 
 ÇIKTI: Sadece saf HTML ver, başka hiçbir şey yazma.
 
-HTML FORMATI (her konu için bir kart):
+HTML FORMATI:
 
 <div class='card'>
     <div class='card-header'><span class='badge'>GÜNDEM</span></div>
     <h3 class='vid-title'>📌 [Konu Başlığı]</h3>
     <div class='topic'>
         <p style='margin-top:0; font-weight:bold;'>Olay Nedir?</p>
-        <p style='color:var(--muted);'>[2-3 cümlelik özet]</p>
+        <p style='color:var(--muted);'>[2-3 cümlelik özet — sadece notlardaki bilgilerden]</p>
         <hr>
         <p style='font-weight:bold;'>Kim Ne Dedi?</p>
         <ul>
-            <li><b>[Kişi Adı]:</b> [Görüşü 1-2 cümle]</li>
-            <li><b>[Kişi Adı 2]:</b> [Görüşü 1-2 cümle]</li>
+            <li><b>[Kişi Adı]:</b> [O kişinin gerçek görüşü — tam cümle] <span class='kaynak-tag'>[Video başlığı]</span></li>
         </ul>
     </div>
 </div>
@@ -618,6 +616,11 @@ FULL_HTML_TEMPLATE = """
         .topic ul { margin: 15px 0 0 0; padding-left: 0; }
         .topic li { margin-bottom: 10px; padding: 10px; background: var(--bg); border-radius: 8px; list-style: none; border-left: 3px solid var(--border); }
         .topic b { color: var(--p); }
+        .kaynak-tag { display:inline-block; background:rgba(99,179,237,0.12); color:#63b3ed; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:6px; vertical-align:middle; font-weight:normal; }
+        .analiz-badge { display:inline-block; background:rgba(251,191,36,0.15); color:#fbbf24; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px; animation: pulse 1.5s infinite; }
+        .vid-sayi { display:inline-block; background:rgba(99,179,237,0.12); color:#63b3ed; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px; }
+        .hazir-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#3fb950; margin-left:5px; vertical-align:middle; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; margin-bottom: 8px; color: white; }
         .btn-p { background: linear-gradient(135deg, #ff4757, #ff6b81); }
         .btn-d { background: var(--bg); border: 1px solid var(--border); color: var(--t); }
@@ -682,41 +685,43 @@ FULL_HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Sayfa açılınca durum kontrol et
         async function durumGuncelle() {
             try {
                 const res = await fetch('/api/durum');
                 const data = await res.json();
-                const onbellekSayisi = Object.keys(data.onbellekte || {}).length;
                 const toplam = {TOPLAM_KANAL};
                 const durum = document.getElementById('radar-durum');
+
                 if (data.calisiyor) {
                     durum.innerHTML = `🔄 Arka plan taraması çalışıyor...`;
-                } else if (onbellekSayisi > 0) {
-                    durum.innerHTML = `✅ <b>${onbellekSayisi}/${toplam}</b> kanal hazır — anında göster!`;
-                    durum.style.color = '#3fb950';
+                    durum.style.color = '#fbbf24';
+                } else if (data.onbellekte && data.onbellekte.length > 0) {
+                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${data.onbellekte.length}/${toplam}</b> kanal hazır`;
+                    durum.style.color = 'var(--muted)';
                 } else {
-                    durum.innerHTML = `⏳ Henüz önbellek yok, ilk tarama bekleniyor...`;
+                    durum.innerHTML = `⏳ İlk tarama bekleniyor...`;
+                    durum.style.color = 'var(--muted)';
                 }
-                // Checkbox'lara hazır badge ekle
+
+                // Her kişi için durum badge
                 document.querySelectorAll('.ch').forEach(cb => {
-                    const label = cb.closest('label');
-                    if (!label) return;
-                    const badge = label.querySelector('.hazir-badge');
-                    if (data.onbellekte && data.onbellekte.includes(cb.value)) {
-                        if (!badge) {
-                            const b = document.createElement('span');
-                            b.className = 'hazir-badge';
-                            b.textContent = '✅';
-                            b.style.cssText = 'font-size:0.75rem; margin-left:5px;';
-                            label.querySelector('.item-text').appendChild(b);
-                        }
+                    const uid = cb.value;
+                    const el = document.getElementById('durum-' + uid);
+                    if (!el) return;
+                    if (data.onbellekte && data.onbellekte.includes(uid)) {
+                        el.innerHTML = '<span class="hazir-dot"></span>';
+                    } else if (data.durumlar && data.durumlar[uid] === 'işleniyor') {
+                        el.innerHTML = '<span class="analiz-badge">⏳</span>';
+                    } else if (data.durumlar && data.durumlar[uid] === 'video_yok') {
+                        el.innerHTML = '<span style="color:#555;font-size:0.65rem;margin-left:4px;">—</span>';
+                    } else if (data.durumlar && data.durumlar[uid] === 'hata') {
+                        el.innerHTML = '<span style="color:#fc8181;font-size:0.65rem;margin-left:4px;">!</span>';
                     }
                 });
             } catch(e) {}
         }
         durumGuncelle();
-        setInterval(durumGuncelle, 30000); // Her 30 sn güncelle
+        setInterval(durumGuncelle, 15000);
 
         async function anindaGoster() {
             const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value);
@@ -788,48 +793,24 @@ FULL_HTML_TEMPLATE = """
             }
         }
 
-        // Önbellek durumunu göster
-        const onbellekKeys = {ONBELLEK_KEYS};
-        function onbellekGoster() {
-            onbellekKeys.forEach(uid => {
-                const el = document.getElementById('durum-' + uid);
-                if (el) el.innerHTML = '✅';
-            });
-        }
-        onbellekGoster();
-
-        // Her 3 dakikada önbellek durumunu güncelle
-        async function durumGuncelle() {
-            try {
-                const r = await fetch('/api/durum');
-                const d = await r.json();
-                d.onbellekte.forEach(uid => {
-                    const el = document.getElementById('durum-' + uid);
-                    if (el) el.innerHTML = '✅';
-                });
-                Object.entries(d.durumlar).forEach(([uid, durum]) => {
-                    const el = document.getElementById('durum-' + uid);
-                    if (!el) return;
-                    if (durum === 'işleniyor') el.innerHTML = '<span style="font-size:0.7rem;">⏳</span>';
-                    else if (durum === 'hata') el.innerHTML = '<span style="font-size:0.7rem; color:#fc8181;">❌</span>';
-                    else if (durum === 'video_yok') el.innerHTML = '<span style="background:rgba(255,255,255,0.06); color:#555; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">yeni yok</span>';
-                });
-            } catch(e) {}
-        }
-        setInterval(durumGuncelle, 3 * 60 * 1000);
-
         async function run() {
             const ids = Array.from(document.querySelectorAll('.ch:checked')).map(c => c.value); 
             if(ids.length === 0) return alert("Kişi seçin!"); 
             if (window.innerWidth <= 768) document.getElementById('side').classList.remove('mobile-open');
             
+            // Seçilen kişilerin badge'ini ⏳ yap
+            ids.forEach(uid => {
+                const el = document.getElementById('durum-' + uid);
+                if (el) el.innerHTML = '<span class="analiz-badge">⏳</span>';
+            });
+
             const box = document.getElementById('box');
             const pContainer = document.getElementById('progress-container');
             const pBar = document.getElementById('p-bar');
             const pText = document.getElementById('p-text');
             
             box.innerHTML = "";
-            pContainer.style.display = "block"; pBar.style.width = "0%";
+            pContainer.style.display = "block"; pBar.style.width = "5%";
             pText.innerText = "Videolar aranıyor...";
             
             try {
@@ -854,18 +835,17 @@ FULL_HTML_TEMPLATE = """
                         try {
                             const data = JSON.parse(line);
                             if (data.type === 'scanning') {
-                                // Kişi için video aranıyor
                                 const el = document.getElementById('durum-' + data.uid);
-                                if (el) el.innerHTML = '<span style="color:#888; font-size:0.7rem;">🔍</span>';
+                                if (el) el.innerHTML = '<span class="analiz-badge">🔍</span>';
+                                pText.innerHTML = `🔍 <b>${data.ad}</b> taranıyor...`;
                             }
                             else if (data.type === 'vid_count') {
-                                // Kişi için kaç video bulundu
                                 const el = document.getElementById('durum-' + data.uid);
                                 if (el) {
                                     if (data.count === 0) {
-                                        el.innerHTML = '<span style="background:rgba(255,255,255,0.08); color:#666; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">yeni yok</span>';
+                                        el.innerHTML = '<span style="color:#555;font-size:0.65rem;margin-left:4px;">—</span>';
                                     } else {
-                                        el.innerHTML = '<span style="background:rgba(99,179,237,0.15); color:#63b3ed; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px;">' + data.count + ' video</span>';
+                                        el.innerHTML = `<span class="vid-sayi">${data.count}</span>`;
                                     }
                                 }
                             }
@@ -915,15 +895,12 @@ FULL_HTML_TEMPLATE = """
 async def index():
     checks_html = "".join([
         f'<label class="item" id="item-{u["id"]}">'
-        f'<span class="item-text">{u["ad"]} <span id="durum-{u["id"]}" style="font-size:0.75rem; color:var(--muted)"></span></span>'
+        f'<span class="item-text">{u["ad"]} <span id="durum-{u["id"]}"></span></span>'
         f'<input type="checkbox" value="{u["id"]}" class="ch">'
         f'<span class="checkmark"></span></label>'
         for u in UNLU_LISTESI
     ])
-    # Önbellek durumunu JS'e göm
-    onbellek_keys = list(ONBELLEK.keys())
     html = FULL_HTML_TEMPLATE.replace("{CHECKS_HTML}", checks_html)
-    html = html.replace("{ONBELLEK_KEYS}", json.dumps(onbellek_keys))
     html = html.replace("{TOPLAM_KANAL}", str(len(UNLU_LISTESI)))
     return html
 
