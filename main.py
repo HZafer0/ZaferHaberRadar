@@ -279,60 +279,80 @@ def get_recent_vids(query, count=3):
 
     for strategy in strategies:
         try:
+            is_url = "youtube.com" in query or "youtu.be" in query
+            search = query if is_url else f"ytsearch5:{query}"
+
             opts = {
                 'extract_flat': True,
-                'playlist_end': 5,
+                'playlistend': 10,          # playlist_end değil playlistend
                 'quiet': True,
                 'no_warnings': True,
                 'ignoreerrors': True,
-                'socket_timeout': 20,
+                'socket_timeout': 25,
                 **strategy
             }
-            search = query if ("youtube.com" in query or "youtu.be" in query) else f"ytsearch5:{query}"
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 res = ydl.extract_info(search, download=False)
 
-            if not res or 'entries' not in res:
+            if not res:
                 continue
 
+            # entries listesini bul — bazen iç içe olabiliyor
+            entries = res.get('entries', [])
+            if not entries and res.get('id'):
+                # Tek video döndü
+                entries = [res]
+
+            # entries içinde de iç içe playlist olabilir
+            flat_entries = []
+            for e in entries:
+                if not e:
+                    continue
+                if e.get('entries'):
+                    flat_entries.extend(e['entries'])
+                else:
+                    flat_entries.append(e)
+
             vids = []
-            for entry in res['entries']:
+            for entry in flat_entries:
                 if not entry or len(vids) >= count:
                     break
 
                 vid_id = entry.get('id')
                 title = entry.get('title', 'Video')
+
+                if not vid_id:
+                    continue
+
                 ts = entry.get('timestamp')
                 upload_date = entry.get('upload_date')
 
-                # Tarih varsa kontrol et
                 if ts:
                     if ts < limit_ts:
                         print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
-                        break  # Sıralı liste, ilk eski görününce dur
-                    print(f"✅ 36 saat içinde: {title[:50]}")
+                        break
+                    print(f"✅ 36s içinde (ts): {title[:50]}")
                     vids.append((vid_id, title))
                 elif upload_date:
                     if upload_date < limit_date_str:
                         print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
                         break
-                    print(f"✅ 36 saat içinde: {title[:50]}")
+                    print(f"✅ 36s içinde (date): {title[:50]}")
                     vids.append((vid_id, title))
                 else:
-                    # Tarih yok ama kanal sıralı gelir → ilk videoları al
-                    # Gerçek tarih transcript/ses aşamasında zaten kontrol edilmiyor
-                    # ama en yeni video listenin başında olduğu için güvenli
-                    print(f"📋 Tarih bilinmiyor, listeye alındı: {title[:50]}")
+                    # Tarih yok → kanal sıralı gelir, ilk videoları al
+                    print(f"📋 Tarih yok, alındı: {title[:50]}")
                     vids.append((vid_id, title))
 
             if vids:
                 return vids
 
         except Exception as e:
-            print(f"Video çekme stratejisi başarısız ({strategy}): {e}")
+            print(f"Strateji başarısız: {e}")
             continue
 
+    print(f"❌ Hiç video bulunamadı: {query[:60]}")
     return []
 
 # ==========================================
