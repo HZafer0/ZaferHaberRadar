@@ -279,7 +279,7 @@ def get_recent_vids(query, count=3):
 
             opts = {
                 'extract_flat': True,
-                'playlistend': 10,          # playlist_end değil playlistend
+                'playlistend': 10,
                 'quiet': True,
                 'no_warnings': True,
                 'ignoreerrors': True,
@@ -293,13 +293,10 @@ def get_recent_vids(query, count=3):
             if not res:
                 continue
 
-            # entries listesini bul — bazen iç içe olabiliyor
             entries = res.get('entries', [])
             if not entries and res.get('id'):
-                # Tek video döndü
                 entries = [res]
 
-            # entries içinde de iç içe playlist olabilir
             flat_entries = []
             for e in entries:
                 if not e:
@@ -323,25 +320,62 @@ def get_recent_vids(query, count=3):
                 ts = entry.get('timestamp')
                 upload_date = entry.get('upload_date')
 
+                # Tarih varsa kontrol et
                 if ts:
                     if ts < limit_ts:
-                        print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
+                        print(f"⏭️ 36s dışında, duruldu: {title[:50]}")
                         break
-                    print(f"✅ 36s içinde (ts): {title[:50]}")
+                    print(f"✅ 36s içinde: {title[:50]}")
                     vids.append((vid_id, title))
                 elif upload_date:
                     if upload_date < limit_date_str:
-                        print(f"⏭️ 36 saat dışında, duruldu: {title[:50]}")
+                        print(f"⏭️ 36s dışında, duruldu: {title[:50]}")
                         break
-                    print(f"✅ 36s içinde (date): {title[:50]}")
+                    print(f"✅ 36s içinde: {title[:50]}")
                     vids.append((vid_id, title))
                 else:
-                    # Tarih yok → kanal sıralı gelir, ilk videoları al
-                    print(f"📋 Tarih yok, alındı: {title[:50]}")
-                    vids.append((vid_id, title))
+                    # Tarih yok → videonun detayını çek (tek istek, hızlı)
+                    print(f"🔍 Tarih yok, detay çekiliyor: {title[:50]}")
+                    try:
+                        detail_opts = {
+                            'quiet': True, 'no_warnings': True,
+                            'skip_download': True, 'socket_timeout': 10,
+                            **strategy
+                        }
+                        with yt_dlp.YoutubeDL(detail_opts) as ydl2:
+                            detail = ydl2.extract_info(
+                                f"https://www.youtube.com/watch?v={vid_id}",
+                                download=False
+                            )
+                        if detail:
+                            ts2 = detail.get('timestamp')
+                            ud2 = detail.get('upload_date')
+                            if ts2:
+                                if ts2 < limit_ts:
+                                    print(f"⏭️ 36s dışında: {title[:50]}")
+                                    break
+                                vids.append((vid_id, title))
+                            elif ud2:
+                                if ud2 < limit_date_str:
+                                    print(f"⏭️ 36s dışında: {title[:50]}")
+                                    break
+                                vids.append((vid_id, title))
+                            else:
+                                print(f"⚠️ Tarih alınamadı, atlandı: {title[:50]}")
+                        else:
+                            print(f"⚠️ Detay alınamadı, atlandı: {title[:50]}")
+                    except Exception as de:
+                        print(f"⚠️ Detay hatası, atlandı: {de}")
 
             if vids:
                 return vids
+
+        except Exception as e:
+            print(f"Strateji başarısız: {e}")
+            continue
+
+    print(f"❌ Hiç video bulunamadı: {query[:60]}")
+    return []
 
         except Exception as e:
             print(f"Strateji başarısız: {e}")
@@ -1048,14 +1082,13 @@ async def analyze_videos(req: AnalizRequest):
         for uid in islenecekler:
             user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
             if user:
-                secilen_isimler.append(user["ad"])
-                # Video aramadan önce frontend'e "tarıyorum" mesajı gönder
                 yield f"{json.dumps({'type': 'scanning', 'uid': uid, 'ad': user['ad']})}\n"
                 vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
                 vid_sayisi = len(vids)
-                # Kaç video bulunduğunu frontend'e bildir
                 yield f"{json.dumps({'type': 'vid_count', 'uid': uid, 'count': vid_sayisi})}\n"
                 if vids:
+                    # Sadece videosu olan kişiyi ekle
+                    secilen_isimler.append(user["ad"])
                     for vid, title in vids:
                         vids_to_process.append({"name": user["ad"], "vid": vid, "title": title})
 
