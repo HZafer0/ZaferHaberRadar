@@ -28,17 +28,17 @@ aktif_key_sirasi = 0
 # 📺 KANAL LİSTESİ
 # ==========================================
 UNLU_LISTESI = [
-    {"id": "altayli", "ad": "Fatih Altaylı", "url": "https://www.youtube.com/@fatihaltayli/videos"},
-    {"id": "ozdemir", "ad": "Cüneyt Özdemir", "url": "https://www.youtube.com/@cuneytozdemir/videos"},
-    {"id": "mengu", "ad": "Nevşin Mengü", "url": "https://www.youtube.com/@nevsinmengu/videos"},
-    {"id": "140journos", "ad": "140journos", "url": "https://www.youtube.com/@140journos/videos"},
-    {"id": "sozcu", "ad": "Sözcü TV", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
-    {"id": "t24", "ad": "T24 Haber", "url": "https://www.youtube.com/@t24habertv/videos"},
-    {"id": "veryansin", "ad": "Veryansın Tv", "url": "https://www.youtube.com/@VeryansinTv/videos"},
-    {"id": "onlar", "ad": "Onlar TV", "url": "https://www.youtube.com/@OnlarTV/videos"},
-    {"id": "cemgurdeniz", "ad": "Cem Gürdeniz", "url": "ytsearch5:Cem Gürdeniz"},
-    {"id": "erhematay", "ad": "Erdem Atay", "url": "ytsearch5:Erdem Atay"},
-    {"id": "serdarakinan", "ad": "Serdar Akinan", "url": "https://www.youtube.com/@serdarakinan/videos"}
+    {"id": "altayli",      "ad": "Fatih Altaylı",  "channel_id": "UCzs5_GtMFqh5ydRqSDMEMoA", "url": "https://www.youtube.com/@fatihaltayli/videos"},
+    {"id": "ozdemir",      "ad": "Cüneyt Özdemir", "channel_id": "UCzDMBEXS5YiCEnFkbD7dCKg", "url": "https://www.youtube.com/@cuneytozdemir/videos"},
+    {"id": "mengu",        "ad": "Nevşin Mengü",   "channel_id": "UCUOSmkF4FKoEp7wuXFXMsCQ", "url": "https://www.youtube.com/@nevsinmengu/videos"},
+    {"id": "140journos",   "ad": "140journos",      "channel_id": "UCWNiE_-eFUdmPTuuk8xFd_Q", "url": "https://www.youtube.com/@140journos/videos"},
+    {"id": "sozcu",        "ad": "Sözcü TV",        "channel_id": "UCMXvdBCXuQFQFMLWHaVBYyA", "url": "https://www.youtube.com/@sozcutelevizyonu/videos"},
+    {"id": "t24",          "ad": "T24 Haber",       "channel_id": "UCpCxQ0BkUy6JrEhMvMi8mpQ", "url": "https://www.youtube.com/@t24habertv/videos"},
+    {"id": "veryansin",    "ad": "Veryansın Tv",    "channel_id": "UCqvlQDcDkUbBhGjHXY4GZSA", "url": "https://www.youtube.com/@VeryansinTv/videos"},
+    {"id": "onlar",        "ad": "Onlar TV",        "channel_id": "UCnHRjhBDK1L8FhE8XCRE_bQ", "url": "https://www.youtube.com/@OnlarTV/videos"},
+    {"id": "cemgurdeniz",  "ad": "Cem Gürdeniz",    "channel_id": None,                         "url": "ytsearch5:Cem Gürdeniz"},
+    {"id": "erhematay",    "ad": "Erdem Atay",      "channel_id": None,                         "url": "ytsearch5:Erdem Atay"},
+    {"id": "serdarakinan", "ad": "Serdar Akinan",   "channel_id": "UCFLFbIKOekBH_8-mSUexBBA", "url": "https://www.youtube.com/@serdarakinan/videos"},
 ]
 
 # ==========================================
@@ -265,120 +265,107 @@ async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
 # ==========================================
 # 📡 VİDEO LİSTESİ ÇEKME
 # ==========================================
-def get_recent_vids(query, count=3):
+def get_recent_vids_rss(channel_id, count=3):
+    """YouTube RSS feed — bot engeli yok, hızlı, ücretsiz."""
+    import urllib.request, xml.etree.ElementTree as ET
+    from datetime import timezone
+
+    now = datetime.now()
+    limit_ts = (now - timedelta(hours=36)).timestamp()
+
+    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    try:
+        req = urllib.request.Request(rss_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            xml_data = resp.read()
+
+        ns = {'atom': 'http://www.w3.org/2005/Atom',
+              'yt': 'http://www.youtube.com/xml/schemas/2015'}
+        root = ET.fromstring(xml_data)
+
+        vids = []
+        for entry in root.findall('atom:entry', ns):
+            if len(vids) >= count:
+                break
+            vid_id_el = entry.find('yt:videoId', ns)
+            title_el  = entry.find('atom:title', ns)
+            pub_el    = entry.find('atom:published', ns)
+            if vid_id_el is None or title_el is None:
+                continue
+            vid_id = vid_id_el.text
+            title  = title_el.text or 'Video'
+            if pub_el is not None:
+                pub_ts = datetime.strptime(pub_el.text[:19], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+                if pub_ts < limit_ts:
+                    print(f"⏭️ RSS 36s dışında, duruldu: {title[:50]}")
+                    break
+                print(f"✅ RSS: {title[:50]}")
+            vids.append((vid_id, title))
+        return vids
+    except Exception as e:
+        print(f"RSS hatası ({channel_id}): {e}")
+        return None  # None = hata → yt-dlp'ye geç
+
+def get_recent_vids(query, count=3, channel_id=None):
     now = datetime.now()
     limit_ts = (now - timedelta(hours=36)).timestamp()
     limit_date_str = (now - timedelta(hours=36)).strftime('%Y%m%d')
+    is_url = "youtube.com" in query or "youtu.be" in query
 
-    # Cookie dosyası varsa ekle (Render bot engelini aşmak için)
+    # 1. channel_id varsa direkt RSS dene
+    if channel_id:
+        rss = get_recent_vids_rss(channel_id, count)
+        if rss is not None:
+            print(f"📡 RSS: {len(rss)} video bulundu")
+            return rss
+
+    # 2. RSS başarısız veya arama sorgusu → yt-dlp
     cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
     cookie_opt = {'cookiefile': cookie_dosyasi} if os.path.exists(cookie_dosyasi) else {}
+    search = query if is_url else f"ytsearch10:{query}"
 
-    strategies = [
+    for strategy in [
         {'extractor_args': {'youtube': {'client': ['ios']}}},
         {'extractor_args': {'youtube': {'client': ['android']}}},
         {'extractor_args': {'youtube': {'client': ['web']}}},
-    ]
-
-    is_url = "youtube.com" in query or "youtu.be" in query
-    search = query if is_url else f"ytsearch10:{query}"
-
-    for strategy in strategies:
+    ]:
         try:
-            opts = {
-                'extract_flat': True,
-                'playlistend': 10,
-                'quiet': True,
-                'no_warnings': True,
-                'ignoreerrors': True,
-                'socket_timeout': 25,
-                **cookie_opt,
-                **strategy
-            }
-
+            opts = {'extract_flat': True, 'playlistend': 10, 'quiet': True,
+                    'no_warnings': True, 'ignoreerrors': True, 'socket_timeout': 25,
+                    **cookie_opt, **strategy}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 res = ydl.extract_info(search, download=False)
-
             if not res:
                 continue
-
             entries = res.get('entries', [])
             if not entries and res.get('id'):
                 entries = [res]
-
-            flat_entries = []
+            flat = []
             for e in (entries or []):
-                if not e:
-                    continue
-                if e.get('entries'):
-                    flat_entries.extend(e['entries'])
-                else:
-                    flat_entries.append(e)
-
+                if not e: continue
+                flat.extend(e['entries']) if e.get('entries') else flat.append(e)
             vids = []
-            for entry in flat_entries:
-                if not entry or len(vids) >= count:
-                    break
-
+            for entry in flat:
+                if not entry or len(vids) >= count: break
                 vid_id = entry.get('id')
-                title = entry.get('title', 'Video')
-                if not vid_id or vid_id.startswith('ytsearch'):
-                    continue
-
+                title  = entry.get('title', 'Video')
+                if not vid_id or vid_id.startswith('ytsearch'): continue
                 ts = entry.get('timestamp')
-                upload_date = entry.get('upload_date')
-
+                ud = entry.get('upload_date')
                 if ts:
-                    if ts < limit_ts:
-                        print(f"⏭️ 36s dışında, duruldu: {title[:50]}")
-                        break
-                    print(f"✅ 36s içinde: {title[:50]}")
+                    if ts < limit_ts: break
                     vids.append((vid_id, title))
-                elif upload_date:
-                    if upload_date < limit_date_str:
-                        print(f"⏭️ 36s dışında, duruldu: {title[:50]}")
-                        break
-                    print(f"✅ 36s içinde: {title[:50]}")
+                elif ud:
+                    if ud < limit_date_str: break
                     vids.append((vid_id, title))
                 else:
-                    # Tarih yok → videonun detayını çek
-                    print(f"🔍 Tarih yok, detay çekiliyor: {title[:50]}")
-                    try:
-                        detail_opts = {
-                            'quiet': True, 'no_warnings': True,
-                            'skip_download': True, 'socket_timeout': 10,
-                            **cookie_opt, **strategy
-                        }
-                        with yt_dlp.YoutubeDL(detail_opts) as ydl2:
-                            detail = ydl2.extract_info(
-                                f"https://www.youtube.com/watch?v={vid_id}",
-                                download=False
-                            )
-                        ts2 = detail.get('timestamp') if detail else None
-                        ud2 = detail.get('upload_date') if detail else None
-                        if ts2:
-                            if ts2 < limit_ts:
-                                print(f"⏭️ 36s dışında: {title[:50]}")
-                                break
-                            vids.append((vid_id, title))
-                        elif ud2:
-                            if ud2 < limit_date_str:
-                                print(f"⏭️ 36s dışında: {title[:50]}")
-                                break
-                            vids.append((vid_id, title))
-                        else:
-                            print(f"⚠️ Tarih alınamadı, atlandı: {title[:50]}")
-                    except Exception as de:
-                        print(f"⚠️ Detay hatası, atlandı: {de}")
-
+                    vids.append((vid_id, title))
             if vids:
                 return vids
-
         except Exception as e:
-            print(f"Strateji başarısız: {e}")
-            continue
+            print(f"yt-dlp başarısız: {e}")
 
-    print(f"❌ Hiç video bulunamadı: {query[:60]}")
+    print(f"❌ Video bulunamadı: {query[:60]}")
     return []
 
 # ==========================================
@@ -531,7 +518,7 @@ async def tek_kisi_isle(uid):
 
     GUNCELLEME_DURUMU[uid] = "işleniyor"
     try:
-        vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
+        vids = await asyncio.to_thread(get_recent_vids, user["url"], 3, user.get("channel_id"))
         if not vids:
             GUNCELLEME_DURUMU[uid] = "video_yok"
             return None
@@ -1089,7 +1076,7 @@ async def analyze_videos(req: AnalizRequest):
             user = next((u for u in UNLU_LISTESI if u["id"] == uid), None)
             if user:
                 yield f"{json.dumps({'type': 'scanning', 'uid': uid, 'ad': user['ad']})}\n"
-                vids = await asyncio.to_thread(get_recent_vids, user["url"], 3)
+                vids = await asyncio.to_thread(get_recent_vids, user["url"], 3, user.get("channel_id"))
                 vid_sayisi = len(vids)
                 yield f"{json.dumps({'type': 'vid_count', 'uid': uid, 'count': vid_sayisi})}\n"
                 if vids:
