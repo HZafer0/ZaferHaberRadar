@@ -387,28 +387,21 @@ def get_recent_vids(query, count=3, channel_id=None):
 # 🎯 VİDEO ÖZET PROMPT (GELİŞTİRİLMİŞ)
 # ==========================================
 def ozetleme_promptu_olustur(name, kaynak="altyazi"):
-    return f"""Sen bir haber analisti asistanısın.
+    return f"""Sen bir haber analisti asistanısın. {name} adlı yorumcunun videosunu analiz edeceksin.
 
-KİŞİ: {name}
-KAYNAK: Bu videonun {kaynak} metni sana verilmiştir.
+GÖREVİN: Videoda geçen önemli konuları ve {name}'in her konu hakkında söylediklerini çıkar.
 
-GÖREVİN:
-Bu kişinin videosunda hangi güncel haber/olay konularından bahsettiğini ve her konu hakkında ne düşündüğünü çıkar.
-
-ÇIKTI FORMATI (kesinlikle bu formatta yaz):
-KONU: [Konu başlığı]
-YORUM: {name} bu konuda [yorumu/görüşü] dedi.
+ÇIKTI FORMATI — Her konu için:
+KONU: [Konu başlığı — kısa ve net]
+SÖYLENEN: {name} — [Burada videoda gerçekten söylenen şeyi yaz. "Değindi", "ele aldı", "konuştu" gibi boş ifadeler YASAK. Direkt ne dediğini yaz. Örnek: "Enflasyon rakamlarının gerçeği yansıtmadığını, vatandaşın sepetindeki ürünlerin yüzde 80 zamlandığını söyledi." gibi somut, dolu cümleler yaz.]
 
 ---
-KONU: [Konu başlığı 2]
-YORUM: {name} bu konuda [yorumu/görüşü] dedi.
 
-KURALLAR:
-- Sadece videoda gerçekten bahsedilen konuları yaz
-- Kişinin ağzından çıkmayan hiçbir şeyi uydurma
-- En az 3, en fazla 7 konu çıkar
-- Her yorumu 1-3 cümleyle özetle
-- Tarih/saat bilgisi ekleme
+KATÎ KURALLAR:
+- "değindi", "ele aldı", "konuştu", "bahsetti" gibi boş fiiller YASAK — ne dediğini yaz
+- Videoda geçen rakamları, isimleri, iddiaları olduğu gibi aktar
+- Uydurma yok — sadece metinde olan bilgileri kullan
+- 3 ila 7 konu arası çıkar
 - Türkçe yaz"""
 
 # ==========================================
@@ -474,40 +467,36 @@ Kesinlikle uydurma — sadece başlıktan çıkarılabilecek bilgileri yaz."""
 # 🧩 SENTEZLEYİCİ PROMPT (GELİŞTİRİLMİŞ)
 # ==========================================
 def sentez_promptu_olustur(isimler_metni, toplanmis_notlar):
-    return f"""Sen Türkiye'nin en iyi haber editörüsün.
+    return f"""Sen Türkiye'nin en iyi haber editörüsün. Aşağıdaki yorumcuların video özetleri sana verilmiştir: {isimler_metni}
 
-Aşağıda şu kişilerin son videolarından çıkarılmış özetler var: {isimler_metni}
+GÖREVİN: Bu notları ortak gündem konularına göre grupla, her konu için bir kart hazırla.
 
-GÖREVİN: Bu notları ORTAK GÜNDEM KONULARINA göre grupla ve düzenli bir haber bülteni hazırla.
+"Kim Ne Dedi?" bölümü için KESİN KURALLAR:
+1. Her satırda o kişinin videoda GERÇEKTEN NE DEDİĞİNİ yaz — rakamlar, isimler, iddialar dahil
+2. "Değindi", "ele aldı", "konuştu", "bahsetti", "görüşünü paylaştı" gibi boş ifadeler KESINLIKLE YASAK
+3. Kısa ama somut olsun — "Enflasyonun yüzde 60 olduğunu ama gerçek rakamın çok daha yüksek olduğunu savundu" gibi
+4. Notlarda o kişi için bilgi yoksa o kişiyi o kartta yazma
+5. Uydurma yok — sadece verilen notlardaki bilgileri kullan
+6. Markdown yasak (**, ## vs.)
 
-KESİN KURALLAR:
-1. Her "Kim Ne Dedi?" satırında o kişinin VİDEODA NE DEDİĞİNİ yaz — "bu konuya değindi" veya "bu konuyu ele aldı" gibi boş ifadeler KESİNLİKLE YASAK
-2. Her kişinin görüşü en az 1 tam cümle olmalı, onun ağzından çıkan gerçek bir fikir içermeli
-3. Notlarda o kişi hakkında yeterli bilgi yoksa o kişiyi o kartta YAZMA
-4. Uydurma bilgi ekleme — sadece verilen notlardaki bilgileri kullan
-5. Tarih/saat bilgisi ekleme
-6. Markdown kullanma (**, ##, * vs. yasak)
-7. Her yorumun yanına küçük bir kaynak etiketi ekle: <span class='kaynak-tag'>[Video Başlığı kısaltılmış]</span>
-
-ÇIKTI: Sadece saf HTML ver, başka hiçbir şey yazma.
+ÇIKTI: Sadece saf HTML, başka hiçbir şey yok.
 
 HTML FORMATI:
-
 <div class='card'>
     <div class='card-header'><span class='badge'>GÜNDEM</span></div>
     <h3 class='vid-title'>📌 [Konu Başlığı]</h3>
     <div class='topic'>
         <p style='margin-top:0; font-weight:bold;'>Olay Nedir?</p>
-        <p style='color:var(--muted);'>[2-3 cümlelik özet — sadece notlardaki bilgilerden]</p>
+        <p style='color:var(--muted);'>[2-3 cümle — olayı özetle, notlardaki bilgilerden]</p>
         <hr>
         <p style='font-weight:bold;'>Kim Ne Dedi?</p>
         <ul>
-            <li><b>[Kişi Adı]:</b> [O kişinin gerçek görüşü — tam cümle] <span class='kaynak-tag'>[Video başlığı]</span></li>
+            <li><b>[Kişi Adı]:</b> [Somut, dolu cümle — ne dediği] <span class='kaynak-tag'>[Video başlığı kısaltılmış]</span></li>
         </ul>
     </div>
 </div>
 
-İŞTE TOPLANAN NOTLAR:
+İŞTE NOTLAR:
 {chr(10).join(toplanmis_notlar)}"""
 
 # ==========================================
@@ -702,7 +691,7 @@ FULL_HTML_TEMPLATE = """
             <button style="background:#238636; width:100%; padding:10px; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="searchSpecial()">ŞİMDİ ARA VE ANALİZ ET</button>
         </div>
 
-        <button class="btn-d" onclick="alert('ZAFER RADARI v4.1\\nÖnbellekli Sürüm')">HAKKINDA</button>
+        <button class="btn-d" onclick="alert('ZAFER RADARI v4.2')">HAKKINDA</button>
     </div>
 
     <div id="main">
@@ -715,7 +704,7 @@ FULL_HTML_TEMPLATE = """
                 <div style="font-size:3rem; margin-bottom:15px;">⚡</div>
                 <h2 style="font-size: 1.8rem; margin-bottom:10px;">Radar Hazır</h2>
                 <p style="max-width:400px; margin:0 auto; line-height:1.6;">Arka planda tüm kanallar sürekli izleniyor.<br>
-                <b style="color:var(--p);">ANİNDA GÖSTER</b> butonuna bas, hazır bülteni gör.</p>
+                <b style="color:var(--p);">ANINDA GÖSTER</b> butonuna bas, hazır bülteni gör.</p>
             </div>
         </div>
     </div>
@@ -734,7 +723,20 @@ FULL_HTML_TEMPLATE = """
                     durum.innerHTML = `🔄 Arka plan taraması çalışıyor...`;
                     durum.style.color = '#fbbf24';
                 } else if (hazirSayisi > 0 || videoYokSayisi > 0) {
-                    durum.innerHTML = `<span style="color:#3fb950">●</span> <b>${hazirSayisi}</b> kanal analiz edildi · <span style="color:#555">${videoYokSayisi} yeni video yok</span>`;
+                    // Yeni videosu olmayan kanalların adlarını göster
+                    const videoYokAdlar = Object.entries(data.durumlar || {})
+                        .filter(([uid, d]) => d === 'video_yok')
+                        .map(([uid]) => {
+                            const el = document.querySelector(`.ch[value="${uid}"]`);
+                            const label = el ? el.closest('label') : null;
+                            const textEl = label ? label.querySelector('.item-text') : null;
+                            return textEl ? textEl.childNodes[0].textContent.trim() : uid;
+                        });
+                    let durumHtml = `<span style="color:#3fb950">●</span> <b>${hazirSayisi}</b> kanal analiz edildi`;
+                    if (videoYokAdlar.length > 0) {
+                        durumHtml += `<br><span style="color:#555; font-size:0.72rem;">Son 36 saatte yeni video yok: ${videoYokAdlar.join(', ')}</span>`;
+                    }
+                    durum.innerHTML = durumHtml;
                     durum.style.color = 'var(--muted)';
                 } else {
                     durum.innerHTML = `⏳ İlk tarama bekleniyor...`;
