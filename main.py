@@ -14,9 +14,9 @@ from typing import List
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
-# 🔐 GROQ API KEY SİSTEMİ
+# 🔐 GEMINI API KEY SİSTEMİ
 # ==========================================
-KEYS_STRING = os.environ.get("GROQ_KEYS", "KEY_1,KEY_2,KEY_3,KEY_4,KEY_5")
+KEYS_STRING = os.environ.get("GEMINI_KEYS", "KEY_1,KEY_2,KEY_3,KEY_4,KEY_5")
 API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip() and not k.strip().startswith("KEY_")]
 
 if not API_KEYS:
@@ -218,10 +218,10 @@ def get_api_sem():
     return _api_sem
 
 # ==========================================
-# 🤖 GROQ LLM — METİN ÖZETLEME
+# 🤖 GEMINI — METİN ÖZETLEME
 # ==========================================
-async def groq_llm_iste(prompt_metni):
-    """Groq LLaMA ile metin özetleme — key rotasyonlu."""
+async def gemini_iste(prompt_metni):
+    """Gemini Flash ile metin özetleme — key rotasyonlu."""
     global aktif_key_sirasi
     toplam_key = len(API_KEYS)
     deneme_sayisi = 0
@@ -230,44 +230,35 @@ async def groq_llm_iste(prompt_metni):
         while deneme_sayisi < toplam_key * 2:
             key = API_KEYS[aktif_key_sirasi]
             try:
-                async with httpx.AsyncClient(timeout=60) as client:
+                async with httpx.AsyncClient(timeout=90) as client:
                     resp = await client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {key}",
-                            "Content-Type": "application/json"
-                        },
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
+                        headers={"Content-Type": "application/json"},
                         json={
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": [{"role": "user", "content": prompt_metni}],
-                            "max_tokens": 4096,
-                            "temperature": 0.3
+                            "contents": [{"parts": [{"text": prompt_metni}]}],
+                            "generationConfig": {
+                                "temperature": 0.3,
+                                "maxOutputTokens": 8192
+                            }
                         }
                     )
                 resp.raise_for_status()
                 data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
             except Exception as e:
                 err_str = str(e).lower()
-                print(f"Uyarı: Groq Key {aktif_key_sirasi} hatası: {e}")
-                if "429" in err_str or "rate" in err_str or "quota" in err_str:
+                print(f"Gemini Key {aktif_key_sirasi} hatası: {e}")
+                if "429" in err_str or "quota" in err_str or "rate" in err_str:
                     aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
-                    await asyncio.sleep(10)
-                else:
                     await asyncio.sleep(5)
+                else:
+                    await asyncio.sleep(3)
                 deneme_sayisi += 1
 
-    raise Exception("Tüm Groq key'leri denendi, limit aşıldı.")
+    raise Exception("Tüm Gemini key'leri denendi, limit aşıldı.")
 
-# guvenli_yapay_zeka_istegi → artık Groq kullanıyor
 async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
-    if ses_dinle and vid:
-        # Sesi indir → Whisper ile transkribe et → LLaMA ile özetle
-        transkript = await asyncio.to_thread(sesi_indir_ve_transkribe_et, vid)
-        tam_prompt = f"{prompt_metni}\n\nVİDEO TRANSKRİPTİ:\n{transkript[:30000]}"
-        return await groq_llm_iste(tam_prompt)
-    else:
-        return await groq_llm_iste(prompt_metni)
+    return await gemini_iste(prompt_metni)
 
 # ==========================================
 # 📡 VİDEO LİSTESİ ÇEKME
