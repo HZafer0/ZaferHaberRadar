@@ -559,22 +559,33 @@ async def tek_kisi_isle(uid):
         return None
 
 async def arkaplan_guncelle():
-    """Tüm kanalları arka planda işleyip önbellekler. Her 2 saatte tekrar çalışır."""
     global ARKAPLAN_CALISIYOR
     while True:
         ARKAPLAN_CALISIYOR = True
-        print("🔄 Arka plan güncellemesi başladı...")
+        print("🔄 Arka plan güncellemesi başladı — önbellek temizleniyor...")
+
+        # Her tarama başında önbelleği sıfırla (eski veri kalmasın)
+        ONBELLEK.clear()
+        ANALIZ_HAFIZASI.clear()
+        onbellek_kaydet()
 
         try:
-            # Her kişiyi sırayla işle (API kotasını korumak için)
             tum_notlar = {}
             for u in UNLU_LISTESI:
                 sonuc = await tek_kisi_isle(u["id"])
                 if sonuc:
                     tum_notlar[u["id"]] = sonuc
-                await asyncio.sleep(5)  # Kişiler arası bekleme
+                else:
+                    # Video yok → önbelleğe video_yok olarak kaydet
+                    ONBELLEK[u["id"]] = {
+                        "html": "",
+                        "notlar": [],
+                        "zaman": datetime.now().isoformat(),
+                        "ad": u["ad"],
+                        "vid_sayisi": 0
+                    }
+                await asyncio.sleep(5)
 
-            # Her kişi için tekli önbellek oluştur
             for uid, veri in tum_notlar.items():
                 sentez = sentez_promptu_olustur(veri["ad"], veri["notlar"])
                 try:
@@ -588,7 +599,7 @@ async def arkaplan_guncelle():
                         "vid_sayisi": veri.get("vid_sayisi", 0)
                     }
                     onbellek_kaydet()
-                    print(f"✅ Önbellek güncellendi: {veri['ad']}")
+                    print(f"✅ Önbellek güncellendi: {veri['ad']} ({veri.get('vid_sayisi',0)} video)")
                 except Exception as e:
                     print(f"Sentez hatası ({uid}): {e}")
 
@@ -596,8 +607,8 @@ async def arkaplan_guncelle():
             print(f"Arka plan genel hata: {e}")
 
         ARKAPLAN_CALISIYOR = False
-        print("✅ Arka plan güncellemesi tamamlandı. 2 saat sonra tekrar çalışacak.")
-        await asyncio.sleep(2 * 60 * 60)  # 2 saat bekle
+        print("✅ Arka plan tamamlandı. 2 saat sonra tekrar çalışacak.")
+        await asyncio.sleep(2 * 60 * 60)
 
 @app.on_event("startup")
 async def startup_event():
@@ -1001,7 +1012,15 @@ async def guncelleme_durumu():
 
 from fastapi import UploadFile, File
 
-@app.post("/api/cookie-yukle")
+@app.get("/api/onbellek-sifirla")
+async def onbellek_sifirla():
+    """Önbelleği manuel sıfırla ve yeniden tarama başlat."""
+    ONBELLEK.clear()
+    ANALIZ_HAFIZASI.clear()
+    GUNCELLEME_DURUMU.clear()
+    onbellek_kaydet()
+    asyncio.create_task(arkaplan_guncelle())
+    return {"durum": "ok", "mesaj": "Önbellek sıfırlandı, yeniden tarama başlatıldı."}
 async def cookie_yukle(file: UploadFile = File(...)):
     """YouTube cookie dosyasını yükle (bot engelini aşmak için)."""
     cookie_dosyasi = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
