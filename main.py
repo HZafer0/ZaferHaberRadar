@@ -470,15 +470,15 @@ def sentez_promptu_olustur(isimler_metni, toplanmis_notlar):
 GÖREVİN: Notları ortak gündem konularına göre grupla, her konu için bir HTML kartı üret.
 
 "Kim Ne Dedi?" kuralları:
-1. ÖZET satırı: 1 kısa cümle — kişinin ana iddiasını yaz (boş fiil yasak: "değindi", "ele aldı", "bahsetti" YASAK)
-2. DETAY: O kişinin o konuda videoda söylediklerinin dolu özeti — 3-5 cümle, rakamlar/isimler/iddialar dahil
-3. Notlarda bilgi yoksa o kişiyi o kartta yazma
-4. Uydurma yok — sadece notlardaki bilgileri kullan
-5. Markdown yasak
+1. ÖZET (görünen kısım): 1 somut cümle — kişinin tam olarak ne dediği. "Değindi/ele aldı/bahsetti/konuştu" gibi boş fiiller KESİNLİKLE YASAK.
+2. KAYNAK TAG: Videonun TAM başlığını yaz, kısaltma yapma.
+3. DETAY PANELİ: Kişinin söylediklerini direkt aktar. "X şunu söyledi:", "Y'ye göre...", "Z iddia etti ki..." formatında. 4-8 cümle. Tüm rakamlar, isimler, spesifik iddialar dahil. Okuyucu videoyu izlemek zorunda kalmamalı.
+4. Notlarda bilgi yoksa o kişiyi yazma.
+5. Uydurma yok. Markdown yasak.
 
-ÇIKTI: Sadece saf HTML, başka hiçbir şey yok.
+ÇIKTI: Sadece saf HTML.
 
-HTML FORMATI (her konu için):
+HTML FORMATI:
 <div class='card'>
     <div class='card-header'><span class='badge'>GÜNDEM</span></div>
     <h3 class='vid-title'>📌 [Konu Başlığı]</h3>
@@ -490,11 +490,11 @@ HTML FORMATI (her konu için):
         <ul>
             <li>
                 <div style='display:flex; align-items:flex-start; justify-content:space-between; gap:10px;'>
-                    <span><b>[Kişi Adı]:</b> [1 cümle — ana iddia, somut] <span class='kaynak-tag'>[Video başlığı kısa]</span></span>
+                    <span><b>[Kişi Adı]:</b> [1 somut cümle, ne dediği] <span class='kaynak-tag'>[VİDEONUN TAM BAŞLIĞI]</span></span>
                     <button class='detay-btn' onclick='toggleDetay(this)'>+ detay</button>
                 </div>
                 <div class='detay-panel' style='display:none;'>
-                    [O kişinin bu konuda söylediklerinin 3-5 cümlelik dolu özeti — rakamlar, isimler, iddialar dahil]
+                    [4-8 cümle direkt aktarım: "X şunu dedi: ...", "Y iddia etti ki ...", tüm rakam/isim/iddialar dahil]
                 </div>
             </li>
         </ul>
@@ -1005,6 +1005,25 @@ Kendi yorumunu katma. Türkçe yaz."""
     except Exception as e:
         return {"html": f"<div class='card'><h3 style='color:red;'>Analiz Hatası</h3><p>{str(e)}</p></div>"}
 
+
+@app.get("/api/debug-onbellek")
+async def debug_onbellek():
+    """Önbellekteki tüm kanalların video başlıklarını göster."""
+    sonuc = {}
+    for uid, veri in ONBELLEK.items():
+        notlar = veri.get("notlar", [])
+        # Her nottan video başlığını çıkar
+        basliklar = []
+        for not_ in notlar:
+            satirlar = not_.split('\n')
+            if satirlar:
+                basliklar.append(satirlar[0][:120])
+        sonuc[veri.get("ad", uid)] = {
+            "vid_sayisi": veri.get("vid_sayisi", 0),
+            "zaman": veri.get("zaman", "?"),
+            "video_notlari": basliklar
+        }
+    return sonuc
 
 @app.get("/api/durum")
 async def guncelleme_durumu():
