@@ -97,13 +97,16 @@ for _uid in ONBELLEK:
 # 📝 TRANSCRIPT ALMA (YENİ API UYUMLU)
 # ==========================================
 def video_metnini_al(vid):
+    # Groq llama-3.3-70b max ~6000 token input güvenli limit
+    METIN_LIMIT = 12000
+
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi, FetchedTranscript
-        # Yeni API (v0.6+): fetch() video_id keyword argümanı ister
-        transcript = YouTubeTranscriptApi.fetch(video_id=vid, languages=['tr', 'en'])
+        from youtube_transcript_api import YouTubeTranscriptApi
+        transcript = YouTubeTranscriptApi.fetch(video_id=vid, languages=['tr', 'en', 'tr-TR'])
         metin = " ".join([t.get('text', '') if isinstance(t, dict) else t.text for t in transcript])
         if metin.strip():
-            return metin[:35000]
+            print(f"✅ Transcript alındı ({vid}): {len(metin)} karakter")
+            return metin[:METIN_LIMIT]
     except Exception as e1:
         print(f"Transcript yöntem-1 hatası ({vid}): {e1}")
 
@@ -115,7 +118,7 @@ def video_metnini_al(vid):
                 t = transcript_list.find_transcript([lang]).fetch()
                 metin = " ".join([x['text'] if isinstance(x, dict) else x.text for x in t])
                 if metin.strip():
-                    return metin[:35000]
+                    return metin[:METIN_LIMIT]
             except:
                 continue
         for t in transcript_list:
@@ -123,14 +126,13 @@ def video_metnini_al(vid):
                 fetched = t.fetch()
                 metin = " ".join([x['text'] if isinstance(x, dict) else x.text for x in fetched])
                 if metin.strip():
-                    return metin[:35000]
+                    return metin[:METIN_LIMIT]
             except:
                 continue
     except Exception as e2:
         print(f"Transcript yöntem-2 hatası ({vid}): {e2}")
-    except Exception as e2:
-        print(f"Transcript yöntem-2 hatası ({vid}): {e2}")
 
+    print(f"⚠️ {vid} için transcript bulunamadı")
     return None
 
 # Aynı anda indirilen dosyaları takip et (dosya kilidi önleme)
@@ -275,7 +277,7 @@ def get_recent_vids_rss(channel_id, count=3):
     import urllib.request, xml.etree.ElementTree as ET
     from datetime import timezone
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     limit_ts = (now - timedelta(hours=36)).timestamp()
 
     rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
@@ -299,17 +301,25 @@ def get_recent_vids_rss(channel_id, count=3):
                 continue
             vid_id = vid_id_el.text
             title  = title_el.text or 'Video'
+
             if pub_el is not None:
-                pub_ts = datetime.strptime(pub_el.text[:19], '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+                # RSS tarihi UTC, timezone-aware parse et
+                pub_str = pub_el.text[:19]  # "2026-03-08T10:00:00"
+                pub_ts = datetime.strptime(pub_str, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
                 if pub_ts < limit_ts:
-                    print(f"⏭️ RSS 36s dışında, duruldu: {title[:50]}")
-                    break
-                print(f"✅ RSS: {title[:50]}")
-            vids.append((vid_id, title))
+                    print(f"⏭️ RSS 36s dışında, duruldu: {title[:50]} ({pub_str})")
+                    break  # Sıralı liste, ilk eskide dur
+                print(f"✅ RSS 36s içinde: {title[:50]} ({pub_str})")
+                vids.append((vid_id, title))  # ← SADECE burada ekle
+            else:
+                # Tarih yoksa alma — güvenli değil
+                print(f"⚠️ RSS tarih yok, atlandı: {title[:50]}")
+
+        print(f"📡 RSS sonuç ({channel_id}): {len(vids)} video")
         return vids
     except Exception as e:
         print(f"RSS hatası ({channel_id}): {e}")
-        return None  # None = hata → yt-dlp'ye geç
+        return None
 
 def get_recent_vids(query, count=3, channel_id=None):
     now = datetime.now()
@@ -430,18 +440,25 @@ async def process_video(name, vid, vtitle, sem, queue=None):
         
         try:
             if konusma_metni:
-                # Altyazı bulundu — ara durum gönder
                 if queue:
                     await queue.put({"type": "subprogress", "vid": vid, "title": vtitle_tr, "durum": f"📄 Altyazı okunuyor: {vtitle_tr[:50]}"})
                 prompt = ozetleme_promptu_olustur(name, "altyazı") + f"\n\nALTYAZI METNİ:\n{konusma_metni}"
                 text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
             else:
-                print(f"⚠️ {vid} için altyazı bulunamadı, ses deneniyor...")
-                # Ses indirme başlıyor — kullanıcıya haber ver
+                # Transcript yok — başlıktan kısa not üret, ses indirme yapma
+                print(f"⚠️ {vid} için transcript yok, başlıktan özet yapılıyor")
                 if queue:
-                    await queue.put({"type": "subprogress", "vid": vid, "title": vtitle_tr, "durum": f"🎧 Ses indiriliyor: {vtitle_tr[:50]} (1-2 dk sürebilir)"})
-                prompt = ozetleme_promptu_olustur(name, "ses") + "\n\nGÖREV: Ekteki ses dosyasını DİNLE ve analiz et."
-                text_content = await guvenli_yapay_zeka_istegi(prompt, vid=vid, ses_dinle=True)
+                    await queue.put({"type": "subprogress", "vid": vid, "title": vtitle_tr, "durum": f"📝 Başlıktan özet: {vtitle_tr[:50]}"})
+                prompt = f"""Video başlığı: "{vtitle_tr}"
+Kanal: {name}
+
+Bu video başlığına bakarak kısa bir not üret. Sadece başlıkta ne konuşulduğunu tahmin et.
+Format:
+KONU: [başlıktan anlaşılan konu]
+YORUM: {name} bu videoda [başlıktan anlaşılan içerik] konusunu ele aldı.
+
+Kesinlikle uydurma — sadece başlıktan çıkarılabilecek bilgileri yaz."""
+                text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
             
             ANALIZ_HAFIZASI[vid] = text_content
             hafiza_kaydet(ANALIZ_HAFIZASI)
@@ -661,7 +678,7 @@ FULL_HTML_TEMPLATE = """
             <button class="btn-d" onclick="document.querySelectorAll('.ch').forEach(c => c.checked = false)">Temizle</button>
         </div>
 
-        <button class="btn-p" style="margin-bottom:8px; padding: 15px;" onclick="anindaGoster()">⚡ ANİNDA GÖSTER</button>
+        <button class="btn-p" style="margin-bottom:8px; padding: 15px;" onclick="anindaGoster()">⚡ ANINDA GÖSTER</button>
         <div style="font-size:0.75rem; color:var(--muted); text-align:center; margin-bottom:12px;">Önbellekteki hazır verileri gösterir</div>
 
         <button class="btn-d" style="margin-bottom:8px; background:#2d333b; color:#cdd9e5;" onclick="run()">🔄 YENİDEN ANALİZ ET</button>
