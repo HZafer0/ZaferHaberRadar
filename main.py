@@ -445,12 +445,10 @@ async def process_video(name, vid, vtitle, sem, queue=None):
                 prompt = f"""Video başlığı: "{vtitle_tr}"
 Kanal: {name}
 
-Bu video başlığına bakarak kısa bir not üret. Sadece başlıkta ne konuşulduğunu tahmin et.
-Format:
-KONU: [başlıktan anlaşılan konu]
-YORUM: {name} bu videoda [başlıktan anlaşılan içerik] konusunu ele aldı.
+Bu video başlığına bakarak aşağıdaki formatta bir not yaz. Sadece başlıktan kesin çıkarılabilecekleri yaz, uydurma.
 
-Kesinlikle uydurma — sadece başlıktan çıkarılabilecek bilgileri yaz."""
+KONU: [başlıktan anlaşılan konu]
+SÖYLENEN: {name} — [başlık ne söylüyorsa onu yaz. Örn: başlık "Dolar 40'a mı çıkar?" ise → "{name} doların 40 seviyesine çıkıp çıkmayacağını sorguladı." gibi somut yaz]"""
                 text_content = await guvenli_yapay_zeka_istegi(prompt, ses_dinle=False)
             
             ANALIZ_HAFIZASI[vid] = text_content
@@ -548,12 +546,11 @@ async def tek_kisi_isle(uid):
         return None
 
 async def arkaplan_guncelle():
-    global ARKAPLAN_CALISIYOR
+    global ARKAPLAN_CALISIYOR, ANALIZ_HAFIZASI
     while True:
         ARKAPLAN_CALISIYOR = True
         print("🔄 Arka plan güncellemesi başladı — önbellek temizleniyor...")
 
-        # Her tarama başında önbelleği sıfırla (eski veri kalmasın)
         ONBELLEK.clear()
         ANALIZ_HAFIZASI.clear()
         onbellek_kaydet()
@@ -1016,7 +1013,7 @@ from fastapi import UploadFile, File
 
 @app.get("/api/onbellek-sifirla")
 async def onbellek_sifirla():
-    """Önbelleği manuel sıfırla ve yeniden tarama başlat."""
+    global ANALIZ_HAFIZASI
     ONBELLEK.clear()
     ANALIZ_HAFIZASI.clear()
     GUNCELLEME_DURUMU.clear()
@@ -1079,7 +1076,6 @@ async def analyze_videos(req: AnalizRequest):
 
         # Önbellekten gelenleri birleştir
         if onbellekten and not islenecekler:
-            # Tüm kişiler önbellekte → anında sentez
             yield f"{json.dumps({'type': 'start', 'total': 0, 'onbellek': True})}\n"
             yield f"{json.dumps({'type': 'synthesizing'})}\n"
 
@@ -1089,7 +1085,15 @@ async def analyze_videos(req: AnalizRequest):
                 if uid in ONBELLEK:
                     ad = ONBELLEK[uid].get("ad", uid)
                     secilen_isimler.append(ad)
-                    toplanmis_notlar.append(f"### {ad}\n{ONBELLEK[uid]['html']}")
+                    # ÖNEMLİ: html değil, ham notları gönder
+                    notlar = ONBELLEK[uid].get("notlar", [])
+                    if notlar:
+                        toplanmis_notlar.extend(notlar)
+                    # vid_sayisi 0 ise (yeni video yok) bu kişiyi atla
+
+            if not toplanmis_notlar:
+                yield f"{json.dumps({'type': 'error', 'message': 'Seçilen kişilerin hiçbirinde yeni video yok.'})}\n"
+                return
 
             isimler_metni = ", ".join(secilen_isimler)
             sentez_prompt = sentez_promptu_olustur(isimler_metni, toplanmis_notlar)
