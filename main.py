@@ -16,11 +16,12 @@ from youtube_transcript_api import YouTubeTranscriptApi
 # ==========================================
 # 🔐 GEMINI API KEY SİSTEMİ
 # ==========================================
-KEYS_STRING = os.environ.get("GEMINI_KEYS", "KEY_1,KEY_2,KEY_3,KEY_4,KEY_5")
+KEYS_STRING = os.environ.get("GEMINI_KEYS", "")
 API_KEYS = [k.strip() for k in KEYS_STRING.split(",") if k.strip() and not k.strip().startswith("KEY_")]
 
+print(f"🔑 Yüklenen Gemini key sayısı: {len(API_KEYS)}")
 if not API_KEYS:
-    API_KEYS = ["DUMMY_KEY"]
+    print("❌ HATA: GEMINI_KEYS environment variable'ı bulunamadı veya boş!")
 
 aktif_key_sirasi = 0
 
@@ -221,8 +222,11 @@ def get_api_sem():
 # 🤖 GEMINI — METİN ÖZETLEME
 # ==========================================
 async def gemini_iste(prompt_metni):
-    """Gemini Flash ile metin özetleme — key rotasyonlu."""
     global aktif_key_sirasi
+
+    if not API_KEYS:
+        raise Exception("GEMINI_KEYS environment variable'ı Render'da tanımlanmamış. Render → Environment → GEMINI_KEYS ekleyin.")
+
     toplam_key = len(API_KEYS)
     deneme_sayisi = 0
 
@@ -242,20 +246,24 @@ async def gemini_iste(prompt_metni):
                             }
                         }
                     )
+                if resp.status_code == 400:
+                    print(f"❌ Gemini 400 hatası (key {aktif_key_sirasi}): {resp.text[:200]}")
+                    raise Exception(f"Gemini API 400: {resp.text[:200]}")
                 resp.raise_for_status()
                 data = resp.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"].strip()
             except Exception as e:
                 err_str = str(e).lower()
                 print(f"Gemini Key {aktif_key_sirasi} hatası: {e}")
-                if "429" in err_str or "quota" in err_str or "rate" in err_str:
+                if "429" in err_str or "quota" in err_str or "rate" in err_str or "exhausted" in err_str:
+                    print(f"⏭️ Key {aktif_key_sirasi} limiti aşıldı, sonraki key'e geçiliyor...")
                     aktif_key_sirasi = (aktif_key_sirasi + 1) % toplam_key
-                    await asyncio.sleep(5)
-                else:
                     await asyncio.sleep(3)
+                else:
+                    await asyncio.sleep(2)
                 deneme_sayisi += 1
 
-    raise Exception("Tüm Gemini key'leri denendi, limit aşıldı.")
+    raise Exception(f"{toplam_key} Gemini key'inin tümü denendi, tüm limitler aşıldı.")
 
 async def guvenli_yapay_zeka_istegi(prompt_metni, vid=None, ses_dinle=False):
     return await gemini_iste(prompt_metni)
