@@ -465,31 +465,38 @@ SÖYLENEN: {name} — [başlık ne söylüyorsa onu yaz. Örn: başlık "Dolar 4
 # 🧩 SENTEZLEYİCİ PROMPT (GELİŞTİRİLMİŞ)
 # ==========================================
 def sentez_promptu_olustur(isimler_metni, toplanmis_notlar):
-    return f"""Sen Türkiye'nin en iyi haber editörüsün. Aşağıdaki yorumcuların video özetleri sana verilmiştir: {isimler_metni}
+    return f"""Sen Türkiye'nin en iyi haber editörüsün. Yorumcuların video özetleri sana verilmiştir: {isimler_metni}
 
-GÖREVİN: Bu notları ortak gündem konularına göre grupla, her konu için bir kart hazırla.
+GÖREVİN: Notları ortak gündem konularına göre grupla, her konu için bir HTML kartı üret.
 
-"Kim Ne Dedi?" bölümü için KESİN KURALLAR:
-1. Her satırda o kişinin videoda GERÇEKTEN NE DEDİĞİNİ yaz — rakamlar, isimler, iddialar dahil
-2. "Değindi", "ele aldı", "konuştu", "bahsetti", "görüşünü paylaştı" gibi boş ifadeler KESINLIKLE YASAK
-3. Kısa ama somut olsun — "Enflasyonun yüzde 60 olduğunu ama gerçek rakamın çok daha yüksek olduğunu savundu" gibi
-4. Notlarda o kişi için bilgi yoksa o kişiyi o kartta yazma
-5. Uydurma yok — sadece verilen notlardaki bilgileri kullan
-6. Markdown yasak (**, ## vs.)
+"Kim Ne Dedi?" kuralları:
+1. ÖZET satırı: 1 kısa cümle — kişinin ana iddiasını yaz (boş fiil yasak: "değindi", "ele aldı", "bahsetti" YASAK)
+2. DETAY: O kişinin o konuda videoda söylediklerinin dolu özeti — 3-5 cümle, rakamlar/isimler/iddialar dahil
+3. Notlarda bilgi yoksa o kişiyi o kartta yazma
+4. Uydurma yok — sadece notlardaki bilgileri kullan
+5. Markdown yasak
 
 ÇIKTI: Sadece saf HTML, başka hiçbir şey yok.
 
-HTML FORMATI:
+HTML FORMATI (her konu için):
 <div class='card'>
     <div class='card-header'><span class='badge'>GÜNDEM</span></div>
     <h3 class='vid-title'>📌 [Konu Başlığı]</h3>
     <div class='topic'>
         <p style='margin-top:0; font-weight:bold;'>Olay Nedir?</p>
-        <p style='color:var(--muted);'>[2-3 cümle — olayı özetle, notlardaki bilgilerden]</p>
+        <p style='color:var(--muted);'>[2-3 cümle özet]</p>
         <hr>
         <p style='font-weight:bold;'>Kim Ne Dedi?</p>
         <ul>
-            <li><b>[Kişi Adı]:</b> [Somut, dolu cümle — ne dediği] <span class='kaynak-tag'>[Video başlığı kısaltılmış]</span></li>
+            <li>
+                <div style='display:flex; align-items:flex-start; justify-content:space-between; gap:10px;'>
+                    <span><b>[Kişi Adı]:</b> [1 cümle — ana iddia, somut] <span class='kaynak-tag'>[Video başlığı kısa]</span></span>
+                    <button class='detay-btn' onclick='toggleDetay(this)'>+ detay</button>
+                </div>
+                <div class='detay-panel' style='display:none;'>
+                    [O kişinin bu konuda söylediklerinin 3-5 cümlelik dolu özeti — rakamlar, isimler, iddialar dahil]
+                </div>
+            </li>
         </ul>
     </div>
 </div>
@@ -642,6 +649,9 @@ FULL_HTML_TEMPLATE = """
         .analiz-badge { display:inline-block; background:rgba(251,191,36,0.15); color:#fbbf24; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px; animation: pulse 1.5s infinite; }
         .vid-sayi { display:inline-block; background:rgba(99,179,237,0.12); color:#63b3ed; font-size:0.65rem; padding:1px 6px; border-radius:10px; margin-left:4px; }
         .hazir-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#3fb950; margin-left:5px; vertical-align:middle; }
+        .detay-btn { background:rgba(255,71,87,0.1); color:var(--p); border:1px solid rgba(255,71,87,0.2); border-radius:6px; padding:3px 10px; font-size:0.75rem; cursor:pointer; white-space:nowrap; flex-shrink:0; font-weight:600; width:auto; margin:0; }
+        .detay-btn:hover { background:rgba(255,71,87,0.2); }
+        .detay-panel { margin-top:10px; padding:12px; background:rgba(255,71,87,0.05); border-left:3px solid var(--p); border-radius:0 8px 8px 0; font-size:0.88rem; line-height:1.6; color:var(--t); }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; margin-bottom: 8px; color: white; }
         .btn-p { background: linear-gradient(135deg, #ff4757, #ff6b81); }
@@ -707,6 +717,14 @@ FULL_HTML_TEMPLATE = """
     </div>
 
     <script>
+        function toggleDetay(btn) {
+            const panel = btn.closest('li').querySelector('.detay-panel');
+            if (!panel) return;
+            const open = panel.style.display !== 'none';
+            panel.style.display = open ? 'none' : 'block';
+            btn.textContent = open ? '+ detay' : '− kapat';
+        }
+
         async function durumGuncelle() {
             try {
                 const res = await fetch('/api/durum');
@@ -990,22 +1008,33 @@ Kendi yorumunu katma. Türkçe yaz."""
 
 @app.get("/api/durum")
 async def guncelleme_durumu():
-    # Tüm kanallar için durum üret
     tam_durum = {}
+    vid_sayilari = {}
     for u in UNLU_LISTESI:
         uid = u["id"]
-        if uid in GUNCELLEME_DURUMU:
+        ob = ONBELLEK.get(uid)
+        if ob is not None:
+            vs = ob.get("vid_sayisi", 0)
+            vid_sayilari[uid] = vs
+            # GUNCELLEME_DURUMU'nu önbellekten türet (en güncel kaynak)
+            if GUNCELLEME_DURUMU.get(uid) == "işleniyor":
+                tam_durum[uid] = "işleniyor"
+            elif vs > 0:
+                tam_durum[uid] = "hazır"
+            else:
+                tam_durum[uid] = "video_yok"
+        elif GUNCELLEME_DURUMU.get(uid):
             tam_durum[uid] = GUNCELLEME_DURUMU[uid]
-        elif uid in ONBELLEK:
-            tam_durum[uid] = "hazır" if ONBELLEK[uid].get("vid_sayisi", 0) > 0 else "video_yok"
+            vid_sayilari[uid] = 0
         else:
             tam_durum[uid] = "bekleniyor"
+            vid_sayilari[uid] = 0
 
     return {
         "calisiyor": ARKAPLAN_CALISIYOR,
         "durumlar": tam_durum,
         "onbellekte": list(ONBELLEK.keys()),
-        "vid_sayilari": {uid: ONBELLEK[uid].get("vid_sayisi", 0) for uid in ONBELLEK},
+        "vid_sayilari": vid_sayilari,
         "son_guncelleme": {uid: ONBELLEK[uid].get("zaman", "?") for uid in ONBELLEK}
     }
 
